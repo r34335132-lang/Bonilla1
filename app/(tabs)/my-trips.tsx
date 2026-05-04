@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
-import * as WebBrowser from "expo-web-browser"; // <-- NUEVO
+import * as WebBrowser from "expo-web-browser"; 
+import * as Linking from "expo-linking"; // <-- IMPORTAMOS LINKING PARA LLAMADAS Y CORREOS
 import React, { useState } from "react";
 import {
   Alert,
@@ -17,16 +18,16 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppButton } from "@/components/AppButton";
 import { BookingCard } from "@/components/BookingCard";
-import { useBooking, Booking } from "@/contexts/BookingContext"; // <-- Importamos Booking type
+import { useBooking, Booking } from "@/contexts/BookingContext"; 
 import { useAuth } from "@/contexts/AuthContext";
 import { useColors } from "@/hooks/useColors";
-import { supabase } from "@/lib/supabase"; // <-- NUEVO
+import { supabase } from "@/lib/supabase"; 
 
 export default function MyTripsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { bookings, isLoading, fetchGuestBookings, cancelBooking } = useBooking();
+  const { bookings, isLoading, fetchGuestBookings } = useBooking();
 
   const [guestEmail, setGuestEmail] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
@@ -40,29 +41,34 @@ export default function MyTripsScreen() {
     setHasSearched(true);
   };
 
+  // --- LA REGLA ESTRICTA DE CANCELACIÓN ---
   const handleCancel = (id: string) => {
     Alert.alert(
-      "Cancelar reserva",
-      "¿Estás seguro de que deseas cancelar esta reserva? Esta acción no se puede deshacer.",
+      "Políticas de Cancelación",
+      `Por seguridad y políticas de Bonilla Tours, los boletos no pueden ser cancelados desde la aplicación.\n\nPara solicitar una cancelación, liberación de asiento o reembolso, comunícate directamente con nuestra sucursal y proporciona tu Folio: ${id}`,
       [
-        { text: "Mantener", style: "cancel" },
         {
-          text: "Sí, cancelar",
-          style: "destructive",
-          onPress: async () => {
-            await cancelBooking(id);
-          },
+          text: "Llamar a Sucursal",
+          onPress: () => Linking.openURL("tel:+526180000000"), // PON AQUÍ TU TELÉFONO REAL
         },
+        {
+          text: "Enviar Correo",
+          onPress: () => Linking.openURL(`mailto:contacto@bonillatours.com?subject=Solicitud de Cancelación Folio ${id}`), // PON AQUÍ TU CORREO REAL
+        },
+        { 
+          text: "Entendido", 
+          style: "cancel" 
+        }
       ]
     );
   };
 
-  // --- NUEVA FUNCIÓN PARA RETOMAR EL PAGO ---
+  // --- FUNCIÓN PARA RETOMAR EL PAGO (ACTUALIZADA A CLIP) ---
   const handlePay = async (booking: Booking) => {
     try {
-      Alert.alert("Conectando", "Generando tu link de pago seguro...");
+      Alert.alert("Conectando", "Generando tu link de pago seguro con Clip...");
       
-      const { data, error } = await supabase.functions.invoke('create-preference', {
+      const { data, error } = await supabase.functions.invoke('create-clip-payment', {
         body: {
           title: `Viaje: ${booking.trip.origin} a ${booking.trip.destination}`,
           quantity: booking.seats.length,
@@ -73,11 +79,11 @@ export default function MyTripsScreen() {
       });
 
       if (error) throw new Error(`Conexión fallida: ${error.message}`);
-      if (data && data.ok === false) throw new Error(`Mercado Pago rechazó la petición: ${data.error}`);
-      if (!data?.init_point) throw new Error("No se recibió el link seguro de pago.");
+      if (data && data.ok === false) throw new Error(`Clip rechazó la petición: ${data.error}`);
+      if (!data?.payment_url) throw new Error("No se recibió el link seguro de pago de Clip.");
 
-      // Abrimos Mercado Pago
-      await WebBrowser.openBrowserAsync(data.init_point);
+      // Abrimos la página oficial de pago de Clip
+      await WebBrowser.openBrowserAsync(data.payment_url);
 
       // Verificamos si pagó después de cerrar
       const { data: checkBooking } = await supabase
@@ -123,7 +129,7 @@ export default function MyTripsScreen() {
           <FlatList
             data={bookings}
             keyExtractor={(b) => b.id}
-            renderItem={({ item }) => <BookingCard booking={item} onCancel={handleCancel} onPay={handlePay} />} // <-- PASAMOS onPay
+            renderItem={({ item }) => <BookingCard booking={item} onCancel={handleCancel} onPay={handlePay} />} 
             contentContainerStyle={{ paddingTop: 20, paddingBottom: insets.bottom + 80 }}
             showsVerticalScrollIndicator={false}
           />
@@ -177,7 +183,7 @@ export default function MyTripsScreen() {
               <>
                 <Text style={[styles.resultsTitle, { color: colors.foreground }]}>Resultados</Text>
                 {bookings.map((b) => (
-                  <BookingCard key={b.id} booking={b} onCancel={handleCancel} onPay={handlePay} /> // <-- PASAMOS onPay
+                  <BookingCard key={b.id} booking={b} onCancel={handleCancel} onPay={handlePay} /> 
                 ))}
               </>
             )}

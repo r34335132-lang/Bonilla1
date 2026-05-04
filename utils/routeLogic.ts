@@ -1,6 +1,5 @@
 // utils/routeLogic.ts
 
-// 1. EL MAPA MAESTRO DE TU RUTA
 export const BONILLA_ROUTE = [
   "Durango",
   "Nombre de Dios",
@@ -14,36 +13,47 @@ export const BONILLA_ROUTE = [
   "Guadalajara",
 ];
 
-// 2. LA FUNCIÓN MÁGICA DE CHOQUE DE ASIENTOS
 export function getOccupiedSeatsForSegment(
-  allBookings: any[], // Todas las reservas de este viaje
-  searchOrigin: string, // Donde se quiere subir el cliente
-  searchDest: string // Donde se quiere bajar el cliente
+  allBookings: any[], 
+  searchOrigin: string, 
+  searchDest: string 
 ): number[] {
   
   const startIndex = BONILLA_ROUTE.indexOf(searchOrigin);
   const endIndex = BONILLA_ROUTE.indexOf(searchDest);
 
-  // Si buscaron una ciudad que no existe o el origen es después del destino, bloqueamos todo
-  if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) {
+  // Si buscaron la misma ciudad o una que no existe, no hay asientos ocupados
+  if (startIndex === -1 || endIndex === -1 || startIndex === endIndex) {
     return []; 
   }
 
+  // Detectamos si el viaje va hacia el SUR (Durango->GDL) o al NORTE (GDL->Durango)
+  const isGoingSouth = startIndex < endIndex;
   const occupiedSeats = new Set<number>();
 
   allBookings.forEach((booking) => {
-    // Si la reserva está cancelada, ignoramos sus asientos (están libres)
     if (booking.status === "cancelled") return;
 
-    // Aquí asumimos que booking.trip.origin tiene la ciudad donde se sube ESA persona
     const bStart = BONILLA_ROUTE.indexOf(booking.trip.origin);
     const bEnd = BONILLA_ROUTE.indexOf(booking.trip.destination);
 
-    // LÓGICA MATEMÁTICA DE SUPERPOSICIÓN:
-    // Chocan si: El inicio de la reserva es MENOR al fin de mi búsqueda 
-    // Y el fin de la reserva es MAYOR al inicio de mi búsqueda
-    if (bStart < endIndex && bEnd > startIndex) {
-      booking.seats.forEach((seat: number) => occupiedSeats.add(seat));
+    if (bStart === -1 || bEnd === -1 || bStart === bEnd) return;
+
+    const bookingGoingSouth = bStart < bEnd;
+
+    // Si una persona va hacia el Sur y otra hacia el Norte, sus asientos jamás chocarán
+    if (isGoingSouth !== bookingGoingSouth) return;
+
+    // LÓGICA DE CHOQUE BIDIRECCIONAL
+    if (isGoingSouth) {
+      if (bStart < endIndex && bEnd > startIndex) {
+        booking.seats.forEach((seat: number) => occupiedSeats.add(seat));
+      }
+    } else {
+      // Va de subida (Norte)
+      if (bStart > endIndex && bEnd < startIndex) {
+        booking.seats.forEach((seat: number) => occupiedSeats.add(seat));
+      }
     }
   });
 

@@ -5,6 +5,7 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -21,7 +22,8 @@ import { useColors } from "@/hooks/useColors";
 import { supabase } from "@/lib/supabase";
 import { BONILLA_ROUTE } from "@/utils/routeLogic";
 
-type AdminTab = "dashboard" | "trips" | "fans";
+// Agregamos la pestaña de paquetería
+type AdminTab = "dashboard" | "trips" | "paqueteria" | "fans";
 
 export default function AdminScreen() {
   const colors = useColors();
@@ -33,23 +35,37 @@ export default function AdminScreen() {
   // Estados Generales
   const [users, setUsers] = useState<any[]>([]);
   const [tripsList, setTripsList] = useState<any[]>([]);
+  const [parcels, setParcels] = useState<any[]>([]); // Estado para la paquetería
   const [loading, setLoading] = useState(false);
 
-  // Estados para Crear Viaje (¡AHORA SÍ INCLUYE HORA DE LLEGADA!)
+  // Estados para Crear Viaje
   const [isCreatingTrip, setIsCreatingTrip] = useState(false);
   const [tripForm, setTripForm] = useState({
     date: "",
     departure_time: "",
-    arrival_time: "", // <-- El culpable
+    arrival_time: "", 
     price: "500",
     total_seats: "40",
     bus_type: "Primera Clase",
   });
 
+  // --- ESTADOS PARA PAQUETERÍA ---
+  const [isCreatingParcel, setIsCreatingParcel] = useState(false);
+  const [parcelForm, setParcelForm] = useState({
+    sender: "",
+    receiver: "",
+    origin: "Durango",
+    destination: "Guadalajara",
+    price: "",
+  });
+  // Modal Picker para Origen/Destino de paquetería
+  const [pickerType, setPickerType] = useState<"origin" | "destination" | null>(null);
+
   useEffect(() => {
     if (role === "admin") {
       fetchUsers();
       fetchTrips();
+      fetchParcels(); // Traemos los paquetes al iniciar
     }
   }, [role]);
 
@@ -75,6 +91,15 @@ export default function AdminScreen() {
     }
   };
 
+  const fetchParcels = async () => {
+    try {
+      const { data } = await supabase.from("parcels").select("*").order("created_at", { ascending: false });
+      setParcels(data || []);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const toggleFanStatus = async (userId: string, currentStatus: boolean) => {
     try {
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, is_fan: !currentStatus } : u)));
@@ -87,7 +112,6 @@ export default function AdminScreen() {
   };
 
   const handleCreateTrip = async () => {
-    // AHORA VALIDAMOS QUE TAMBIÉN LLENEN LA HORA DE LLEGADA
     if (!tripForm.date || !tripForm.departure_time || !tripForm.arrival_time || !tripForm.price || !tripForm.total_seats) {
       Alert.alert("Incompleto", "Llena todos los campos incluyendo la hora de llegada.");
       return;
@@ -100,7 +124,7 @@ export default function AdminScreen() {
         destination: BONILLA_ROUTE[BONILLA_ROUTE.length - 1], 
         date: tripForm.date,
         departure_time: tripForm.departure_time,
-        arrival_time: tripForm.arrival_time, // <-- AHORA SÍ MANDAMOS UNA HORA REAL
+        arrival_time: tripForm.arrival_time, 
         duration: "Aprox 8h",
         price: Number(tripForm.price),
         total_seats: Number(tripForm.total_seats),
@@ -118,6 +142,35 @@ export default function AdminScreen() {
       Alert.alert("Error al crear viaje", error.message);
     } finally {
       setIsCreatingTrip(false);
+    }
+  };
+
+  // --- NUEVA LÓGICA DE PAQUETERÍA ---
+  const handleCreateParcel = async () => {
+    if (!parcelForm.sender || !parcelForm.receiver || !parcelForm.price) {
+      Alert.alert("Error", "Llena todos los campos del paquete.");
+      return;
+    }
+
+    setIsCreatingParcel(true);
+    try {
+      const { error } = await supabase.from('parcels').insert({
+        sender_name: parcelForm.sender,
+        receiver_name: parcelForm.receiver,
+        origin: parcelForm.origin,
+        destination: parcelForm.destination,
+        price: Number(parcelForm.price),
+        status: 'pending'
+      });
+
+      if (error) throw error;
+      Alert.alert("¡Éxito!", "Paquete registrado correctamente en la plataforma.");
+      setParcelForm({ ...parcelForm, sender: '', receiver: '', price: '' });
+      fetchParcels(); 
+    } catch (err: any) {
+      Alert.alert("Error al registrar paquete", err.message);
+    } finally {
+      setIsCreatingParcel(false);
     }
   };
 
@@ -142,20 +195,26 @@ export default function AdminScreen() {
         <Text style={[styles.screenTitle, { color: colors.foreground }]}>Panel Admin</Text>
       </View>
 
-      {/* TABS SELECTOR */}
-      <View style={styles.tabsContainer}>
-        <TouchableOpacity style={[styles.tab, activeTab === "dashboard" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("dashboard")}>
-          <Feather name="pie-chart" size={16} color={activeTab === "dashboard" ? "#fff" : colors.mutedForeground} />
-          <Text style={[styles.tabText, { color: activeTab === "dashboard" ? "#fff" : colors.mutedForeground }]}>Métricas</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === "trips" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("trips")}>
-          <Feather name="truck" size={16} color={activeTab === "trips" ? "#fff" : colors.mutedForeground} />
-          <Text style={[styles.tabText, { color: activeTab === "trips" ? "#fff" : colors.mutedForeground }]}>Viajes</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === "fans" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("fans")}>
-          <Feather name="star" size={16} color={activeTab === "fans" ? "#fff" : colors.mutedForeground} />
-          <Text style={[styles.tabText, { color: activeTab === "fans" ? "#fff" : colors.mutedForeground }]}>Fans</Text>
-        </TouchableOpacity>
+      {/* TABS SELECTOR - Ahora con scroll por si la pantalla es chica */}
+      <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
+          <TouchableOpacity style={[styles.tab, activeTab === "dashboard" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("dashboard")}>
+            <Feather name="pie-chart" size={16} color={activeTab === "dashboard" ? "#fff" : colors.mutedForeground} />
+            <Text style={[styles.tabText, { color: activeTab === "dashboard" ? "#fff" : colors.mutedForeground }]}>Métricas</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tab, activeTab === "trips" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("trips")}>
+            <Feather name="truck" size={16} color={activeTab === "trips" ? "#fff" : colors.mutedForeground} />
+            <Text style={[styles.tabText, { color: activeTab === "trips" ? "#fff" : colors.mutedForeground }]}>Viajes</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tab, activeTab === "paqueteria" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("paqueteria")}>
+            <Feather name="package" size={16} color={activeTab === "paqueteria" ? "#fff" : colors.mutedForeground} />
+            <Text style={[styles.tabText, { color: activeTab === "paqueteria" ? "#fff" : colors.mutedForeground }]}>Paquetería</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tab, activeTab === "fans" && { backgroundColor: colors.primary }]} onPress={() => setActiveTab("fans")}>
+            <Feather name="star" size={16} color={activeTab === "fans" ? "#fff" : colors.mutedForeground} />
+            <Text style={[styles.tabText, { color: activeTab === "fans" ? "#fff" : colors.mutedForeground }]}>Fans</Text>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
 
       {/* 1. CONTENIDO DASHBOARD */}
@@ -263,7 +322,82 @@ export default function AdminScreen() {
         </ScrollView>
       )}
 
-      {/* 3. CONTENIDO DE CLIENTES FAN */}
+      {/* 3. CONTENIDO DE PAQUETERÍA */}
+      {activeTab === "paqueteria" && (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.iconBox, { backgroundColor: "#FFF3CD" }]}>
+                <Feather name="package" size={20} color="#E67E22" />
+              </View>
+              <Text style={[styles.cardTitle, { color: colors.foreground }]}>Registrar Paquete</Text>
+            </View>
+            
+            <View style={styles.form}>
+              <View style={styles.inputWrap}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Remitente (Envía)</Text>
+                <TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={parcelForm.sender} onChangeText={(v) => setParcelForm({ ...parcelForm, sender: v })} placeholder="Nombre completo" placeholderTextColor={colors.mutedForeground} />
+              </View>
+
+              <View style={styles.inputWrap}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Destinatario (Recibe)</Text>
+                <TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={parcelForm.receiver} onChangeText={(v) => setParcelForm({ ...parcelForm, receiver: v })} placeholder="Nombre completo" placeholderTextColor={colors.mutedForeground} />
+              </View>
+
+              <View style={styles.row}>
+                <View style={styles.inputWrap}>
+                  <Text style={[styles.label, { color: colors.foreground }]}>Origen</Text>
+                  <TouchableOpacity style={[styles.input, { backgroundColor: colors.muted, justifyContent: 'center' }]} onPress={() => setPickerType('origin')}>
+                    <Text style={{ color: colors.foreground, fontWeight: "500" }}>{parcelForm.origin}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.inputWrap}>
+                  <Text style={[styles.label, { color: colors.foreground }]}>Destino</Text>
+                  <TouchableOpacity style={[styles.input, { backgroundColor: colors.muted, justifyContent: 'center' }]} onPress={() => setPickerType('destination')}>
+                    <Text style={{ color: colors.foreground, fontWeight: "500" }}>{parcelForm.destination}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.inputWrap}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Costo de Envío ($)</Text>
+                <TextInput style={[styles.input, { backgroundColor: colors.muted, color: "#E67E22", fontWeight: 'bold' }]} value={parcelForm.price} onChangeText={(v) => setParcelForm({ ...parcelForm, price: v })} keyboardType="numeric" placeholder="0.00" placeholderTextColor={colors.mutedForeground} />
+              </View>
+
+              <TouchableOpacity 
+                style={[styles.createBtn, { backgroundColor: "#E67E22" }]}
+                onPress={handleCreateParcel}
+                disabled={isCreatingParcel}
+              >
+                {isCreatingParcel ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Generar Folio y Cobrar</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Text style={[styles.sectionTitle, { color: colors.foreground, marginTop: 24 }]}>Historial de Envíos</Text>
+          {loading ? <ActivityIndicator color={colors.primary} /> : (
+            parcels.length === 0 ? (
+              <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 20 }}>No hay paquetes registrados.</Text>
+            ) : (
+              parcels.map((p) => (
+                <View key={p.id} style={[styles.tripItem, { backgroundColor: colors.card, borderColor: colors.border, alignItems: 'flex-start' }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.tripDate, { color: "#E67E22" }]}>PAQ-{p.folio}</Text>
+                    <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: '700' }}>{p.origin} a {p.destination}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 13, marginTop: 4 }}>De: {p.sender_name}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 13 }}>Para: {p.receiver_name}</Text>
+                  </View>
+                  <View style={{ justifyContent: 'center', height: '100%' }}>
+                    <Text style={{ color: colors.foreground, fontWeight: '900', fontSize: 18 }}>${p.price}</Text>
+                  </View>
+                </View>
+              ))
+            )
+          )}
+        </ScrollView>
+      )}
+
+      {/* 4. CONTENIDO DE CLIENTES FAN */}
       {activeTab === "fans" && (
         <FlatList
           data={users}
@@ -283,6 +417,56 @@ export default function AdminScreen() {
           )}
         />
       )}
+
+      {/* --- MODAL PARA ORIGEN Y DESTINO DE PAQUETERÍA --- */}
+      <Modal
+        visible={pickerType !== null}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setPickerType(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, paddingBottom: insets.bottom || 24 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.foreground }]}>
+                Selecciona {pickerType === "origin" ? "Origen" : "Destino"}
+              </Text>
+              <TouchableOpacity onPress={() => setPickerType(null)} style={styles.modalCloseBtn}>
+                <Feather name="x" size={24} color={colors.foreground} />
+              </TouchableOpacity>
+            </View>
+            
+            <FlatList
+              data={BONILLA_ROUTE}
+              keyExtractor={(item) => item}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => {
+                const isSelected = item === (pickerType === "origin" ? parcelForm.origin : parcelForm.destination);
+                return (
+                  <TouchableOpacity
+                    style={[
+                      styles.cityOption,
+                      { borderBottomColor: colors.border },
+                      isSelected && { backgroundColor: colors.secondary }
+                    ]}
+                    onPress={() => {
+                      if (pickerType === "origin") setParcelForm({...parcelForm, origin: item});
+                      if (pickerType === "destination") setParcelForm({...parcelForm, destination: item});
+                      setPickerType(null);
+                    }}
+                  >
+                    <Text style={[styles.cityOptionText, { color: isSelected ? colors.primary : colors.foreground }]}>
+                      {item}
+                    </Text>
+                    {isSelected && <Feather name="check" size={20} color={colors.primary} />}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+
     </KeyboardAvoidingView>
   );
 }
@@ -293,7 +477,7 @@ const styles = StyleSheet.create({
   screenTitle: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5 },
   title: { fontSize: 20, fontWeight: "700" },
   tabsContainer: { flexDirection: "row", padding: 16, gap: 12 },
-  tab: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderRadius: 12 },
+  tab: { paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderRadius: 12 },
   tabText: { fontSize: 13, fontWeight: "700" },
   scrollContent: { padding: 16, paddingBottom: 100 },
   sectionTitle: { fontSize: 18, fontWeight: "800", marginBottom: 12 },
@@ -307,7 +491,7 @@ const styles = StyleSheet.create({
   progressBarBg: { height: 12, borderRadius: 6, overflow: 'hidden' },
   progressBarFill: { height: '100%', borderRadius: 6 },
 
-  // Trip Form
+  // Forms
   card: { padding: 20, borderRadius: 24, borderWidth: 1, elevation: 2 },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
   iconBox: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
@@ -317,14 +501,25 @@ const styles = StyleSheet.create({
   inputWrap: { flex: 1, gap: 6 },
   label: { fontSize: 12, fontWeight: "700", marginLeft: 4, textTransform: "uppercase" },
   input: { height: 50, borderRadius: 12, paddingHorizontal: 16, fontSize: 15, fontWeight: "500" },
-  
-  // Trip List
+  createBtn: { padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 8 },
+  createBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+
+  // Lists
   tripItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderRadius: 16, borderWidth: 1, marginBottom: 12 },
-  tripDate: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  tripDate: { fontSize: 15, fontWeight: '900', marginBottom: 4 },
 
   // User Card
   userCard: { flexDirection: "row", alignItems: "center", padding: 16, borderRadius: 16, borderWidth: 1, gap: 12, marginBottom: 12 },
   avatar: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   userName: { fontSize: 16, fontWeight: "700", marginBottom: 2 },
   userEmail: { fontSize: 13 },
+
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
+  modalContent: { borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: "80%", paddingTop: 24, paddingHorizontal: 20 },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  modalTitle: { fontSize: 20, fontWeight: "800" },
+  modalCloseBtn: { padding: 4 },
+  cityOption: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 18, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderRadius: 12 },
+  cityOptionText: { fontSize: 16, fontWeight: "600" },
 });

@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router"; 
 import * as WebBrowser from "expo-web-browser";
 import React, { useState, useEffect } from "react"; 
 import {
@@ -26,7 +26,11 @@ export default function CheckoutScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // EXTRAEMOS LOS DATOS DEL USUARIO
+  const { isRoundTrip, returnDate } = useLocalSearchParams<{
+    isRoundTrip?: string;
+    returnDate?: string;
+  }>();
+
   const { user, isGuest, guestInfo, setGuestInfo } = useAuth();
   const userName = user?.user_metadata?.name || user?.name || guestInfo?.name || "";
   const userPhone = user?.user_metadata?.phone || user?.phone || guestInfo?.phone || "";
@@ -41,7 +45,6 @@ export default function CheckoutScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // --- MAGIA PARA EVITAR LA PANTALLA ROJA ---
   useEffect(() => {
     if (!pendingTrip || pendingSeats.length === 0) {
       router.back();
@@ -51,7 +54,6 @@ export default function CheckoutScreen() {
   if (!pendingTrip || pendingSeats.length === 0) {
     return null;
   }
-  // ------------------------------------------
 
   const totalPrice = pendingSeats.length * pendingTrip.price;
 
@@ -74,7 +76,6 @@ export default function CheckoutScreen() {
     }
 
     try {
-      // 1. GUARDAMOS LA RESERVA (Ahora 'pendingTrip' lleva el origin/destination sobreescritos del tramo)
       const booking = await confirmBooking({
         trip: pendingTrip, 
         seats: pendingSeats,
@@ -82,15 +83,22 @@ export default function CheckoutScreen() {
         passengerEmail: email,
         passengerPhone: phone,
         paymentMethod,
-        status: paymentMethod === "card" ? "pending" : "confirmed", 
+        status: "pending", 
         userId: user?.id ?? null,
         isGuest: !user,
         totalPrice,
       });
 
-      // 2. SI ELIGEN TARJETA
+      if (isRoundTrip === "true") {
+        await supabase
+          .from('bookings')
+          .update({ is_round_trip: true })
+          .eq('booking_ref', booking.id);
+      }
+
       if (paymentMethod === "card") {
-        const { data, error } = await supabase.functions.invoke('create-preference', {
+        // --- AHORA LLAMAMOS A CLIP ---
+        const { data, error } = await supabase.functions.invoke('create-clip-payment', {
           body: {
             title: `Viaje: ${pendingTrip.origin} a ${pendingTrip.destination}`,
             quantity: pendingSeats.length,
@@ -101,33 +109,29 @@ export default function CheckoutScreen() {
         });
 
         if (error) throw new Error(`Conexión fallida: ${error.message}`);
-        if (data && data.ok === false) throw new Error(`Mercado Pago rechazó el pago: ${data.error}`);
-        if (!data?.init_point) throw new Error("No se recibió el link seguro de pago.");
+        if (data && data.ok === false) throw new Error(`Clip rechazó el pago: ${data.error}`);
+        // Clip devuelve la URL de pago en una variable que nombraremos payment_url
+        if (!data?.payment_url) throw new Error("No se recibió el link seguro de pago de Clip.");
 
-        // Abrimos Mercado Pago y la app se "pausa" aquí hasta que el usuario cierre la ventana
-        await WebBrowser.openBrowserAsync(data.init_point);
+        await WebBrowser.openBrowserAsync(data.payment_url);
         
-        // --- MAGIA NUEVA: VERIFICAMOS SI REALMENTE PAGÓ ---
-        // Le preguntamos a Supabase cómo quedó la reserva después de cerrar el navegador
-        const { data: checkBooking, error: checkError } = await supabase
+        const { data: checkBooking } = await supabase
           .from('bookings')
           .select('status')
           .eq('id', booking.id)
           .single();
 
         if (checkBooking?.status !== "confirmed") {
-          // Si sigue en "pending", significa que el usuario cerró sin pagar o el pago rebotó
           Alert.alert(
             "Pago no completado", 
             "Cerramos la ventana de pago. Tu reserva se guardó como pendiente de pago."
           );
           
           router.navigate("/(tabs)/my-trips"); 
-          return; // Detenemos la función aquí
+          return; 
         }
       }
       
-      // 3. SI ERA EFECTIVO (O SI LA TARJETA SE CONFIRMÓ), MANDAMOS A ÉXITO
       router.replace({
         pathname: "/booking-success",
         params: { bookingId: booking.id, bookingData: JSON.stringify(booking) },
@@ -197,11 +201,19 @@ export default function CheckoutScreen() {
 
             <View style={styles.ticketDetails}>
               <View style={styles.ticketDetailCol}>
-                <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Fecha de salida</Text>
+                <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Fecha de ida</Text>
                 <Text style={[styles.ticketValue, { color: colors.foreground }]}>{pendingTrip.date}</Text>
               </View>
+              
+              {isRoundTrip === "true" && returnDate ? (
+                <View style={styles.ticketDetailCol}>
+                  <Text style={[styles.ticketLabel, { color: colors.primary }]}>Día de regreso</Text>
+                  <Text style={[styles.ticketValue, { color: colors.primary }]}>{returnDate}</Text>
+                </View>
+              ) : null}
+
               <View style={[styles.ticketDetailCol, { alignItems: "flex-end" }]}>
-                <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Asientos elegidos</Text>
+                <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Asientos</Text>
                 <Text style={[styles.ticketValue, { color: colors.primary }]}>
                   {pendingSeats.sort((a, b) => a - b).join(", ")}
                 </Text>
@@ -210,7 +222,14 @@ export default function CheckoutScreen() {
           </View>
           
           <View style={[styles.priceRow, { backgroundColor: colors.secondary }]}>
-            <Text style={[styles.priceLabel, { color: colors.primary }]}>Total a pagar</Text>
+            <View>
+              <Text style={[styles.priceLabel, { color: colors.primary }]}>Total a pagar</Text>
+              {isRoundTrip === "true" && (
+                <Text style={{fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '600'}}>
+                  (Incluye viaje redondo)
+                </Text>
+              )}
+            </View>
             <Text style={[styles.priceValue, { color: colors.primary }]}>
               ${totalPrice} <Text style={styles.priceCurrency}>MXN</Text>
             </Text>
@@ -251,11 +270,12 @@ export default function CheckoutScreen() {
                   <Feather name={method === "card" ? "credit-card" : "dollar-sign"} size={18} color={paymentMethod === method ? "#fff" : colors.mutedForeground} />
                 </View>
                 <View style={{ flex: 1 }}>
+                  {/* --- CAMBIO A CLIP --- */}
                   <Text style={[styles.paymentTitle, { color: paymentMethod === method ? colors.primary : colors.foreground }]}>
-                    {method === "card" ? "Tarjeta / Mercado Pago" : "Pago en Taquilla"}
+                    {method === "card" ? "Tarjeta (Clip)" : "Pago en Taquilla"}
                   </Text>
                   <Text style={[styles.paymentSub, { color: colors.mutedForeground }]}>
-                    {method === "card" ? "Procesamiento seguro por Mercado Pago" : "Paga al abordar (sujeto a disponibilidad)"}
+                    {method === "card" ? "Procesamiento seguro con Clip" : "Paga al abordar o en sucursal"}
                   </Text>
                 </View>
                 <View style={[styles.radio, { borderColor: paymentMethod === method ? colors.primary : colors.border }]}>
@@ -269,14 +289,21 @@ export default function CheckoutScreen() {
             <View style={[styles.cardNotice, { backgroundColor: colors.muted }]}>
               <Feather name="lock" size={14} color={colors.mutedForeground} />
               <Text style={[styles.cardNoticeText, { color: colors.mutedForeground }]}>
-                Serás redirigido a Mercado Pago para completar tu compra de forma 100% segura.
+                Serás redirigido al portal oficial de Clip para completar tu compra de forma 100% segura.
               </Text>
             </View>
-          ) : null}
+          ) : (
+            <View style={[styles.cardNotice, { backgroundColor: "#fff3cd", borderColor: "#ffeeba", borderWidth: 1 }]}>
+              <Feather name="clock" size={14} color="#856404" />
+              <Text style={[styles.cardNoticeText, { color: "#856404" }]}>
+                Importante: Tu reserva se guardará por 2 horas. Si no realizas el pago en taquilla en este tiempo, se cancelará automáticamente.
+              </Text>
+            </View>
+          )}
         </Section>
 
         <View style={{ marginTop: 10 }}>
-          <AppButton title="Confirmar y Pagar" onPress={handleConfirm} loading={loading} />
+          <AppButton title="Confirmar Reserva" onPress={handleConfirm} loading={loading} />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
