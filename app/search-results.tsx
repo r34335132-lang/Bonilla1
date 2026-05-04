@@ -17,7 +17,6 @@ import { useColors } from "@/hooks/useColors";
 import { supabase } from "@/lib/supabase";
 import { getOccupiedSeatsForSegment, BONILLA_ROUTE } from "@/utils/routeLogic"; 
 
-// --- TRAEMOS EL DICCIONARIO DE TIEMPOS AQUÍ ---
 const ROUTE_OFFSETS: Record<string, number> = {
   "Durango": 0,
   "Nombre de Dios": 45,
@@ -31,15 +30,14 @@ const ROUTE_OFFSETS: Record<string, number> = {
   "Guadalajara": 600,
 };
 
-// Función para calcular tiempos y precios del tramo
-const calculateSegmentData = (baseDepartureTime: string, basePrice: number, origin: string, destination: string) => {
-  if (!baseDepartureTime) return { dep: "", arr: "", dur: "", price: basePrice };
+const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: string) => {
+  if (!trip.departure_time) return { dep: "", arr: "", dur: "", price: trip.price };
 
-  const [hours, minutes] = baseDepartureTime.split(":").map(Number);
+  const [hours, minutes] = trip.departure_time.split(":").map(Number);
   const baseMinutes = hours * 60 + minutes;
 
-  const originOffset = ROUTE_OFFSETS[origin] || 0;
-  const destOffset = ROUTE_OFFSETS[destination] || 0;
+  const originOffset = ROUTE_OFFSETS[searchOrigin] || 0;
+  const destOffset = ROUTE_OFFSETS[searchDest] || 0;
 
   const depTotal = baseMinutes + originOffset;
   const arrTotal = baseMinutes + destOffset;
@@ -55,14 +53,33 @@ const calculateSegmentData = (baseDepartureTime: string, basePrice: number, orig
   const durM = durationMins % 60;
   const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
 
-  const tripTotalMins = 600;
-  const calculatedPrice = Math.round(((basePrice / tripTotalMins) * durationMins) / 10) * 10;
+  let exactPrice = trip.price; 
+  
+  if (trip.prices && typeof trip.prices === 'object' && Object.keys(trip.prices).length > 0) {
+    if (trip.origin === searchOrigin) {
+      const directPrice = Number(trip.prices[searchDest]);
+      if (directPrice > 0) exactPrice = directPrice;
+    } else {
+      const priceToDest = Number(trip.prices[searchDest]) || 0;
+      const priceToOrigin = Number(trip.prices[searchOrigin]) || 0;
+      
+      if (priceToDest > priceToOrigin && priceToOrigin > 0) {
+        exactPrice = priceToDest - priceToOrigin;
+      } else {
+        const tripTotalMins = 600;
+        exactPrice = Math.round(((trip.price / tripTotalMins) * durationMins) / 10) * 10;
+      }
+    }
+  } else {
+    const tripTotalMins = 600;
+    exactPrice = Math.round(((trip.price / tripTotalMins) * durationMins) / 10) * 10;
+  }
 
   return {
     dep: formatTime(depTotal),
     arr: formatTime(arrTotal),
     dur: durText,
-    price: calculatedPrice || basePrice
+    price: exactPrice
   };
 };
 
@@ -70,18 +87,19 @@ export default function SearchResultsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // Ignoramos el 'results' gordo y solo tomamos la ruta y fecha
-  const { origin, destination, date } = useLocalSearchParams<{
+  // --- MAGIA NUEVA: Recibimos si el viaje es redondo y la fecha de regreso ---
+  const { origin, destination, date, isRoundTrip, returnDate } = useLocalSearchParams<{
     origin: string;
     destination: string;
     date: string;
+    isRoundTrip?: string;
+    returnDate?: string;
   }>();
   const { setPendingTrip, setPendingSeats } = useBooking();
 
   const [liveTrips, setLiveTrips] = useState<Trip[]>([]);
   const [isCalculating, setIsCalculating] = useState(true);
 
-  // Parseo seguro de la fecha
   const formattedDate = useMemo(() => {
     try {
       if (!date) return "";
@@ -96,7 +114,6 @@ export default function SearchResultsScreen() {
     }
   }, [date]);
 
-  // --- NUEVA LÓGICA: LA PANTALLA BUSCA SUS PROPIOS DATOS ---
   useEffect(() => {
     const fetchAndCalculateTrips = async () => {
       if (!origin || !destination || !date) return;
@@ -111,7 +128,6 @@ export default function SearchResultsScreen() {
           return;
         }
 
-        // 1. Buscamos viajes en Supabase
         const { data: tripsData, error: tripsError } = await supabase
           .from("trips")
           .select("*")
@@ -119,7 +135,6 @@ export default function SearchResultsScreen() {
 
         if (tripsError) throw tripsError;
 
-        // 2. Filtramos los que pasan por nuestro tramo
         const validTrips = (tripsData || []).filter((trip) => {
           const tripStart = BONILLA_ROUTE.indexOf(trip.origin);
           const tripEnd = BONILLA_ROUTE.indexOf(trip.destination);
@@ -131,9 +146,19 @@ export default function SearchResultsScreen() {
           return;
         }
 
-        // 3. Transformamos horas y precios para ESTE tramo
         const formattedTrips = validTrips.map(t => {
-          const segmentData = calculateSegmentData(t.departure_time, t.price, origin, destination);
+          const segmentData = calculateSegmentData(t, origin, destination);
+          
+          // --- AQUÍ APLICAMOS LA TARIFA DE IDA Y VUELTA SI ESTÁ ACTIVA ---
+          let finalPrice = segmentData.price;
+          
+          // Verificamos si en el buscador activaron "isRoundTrip"
+          if (isRoundTrip === "true" && t.round_trip_prices && typeof t.round_trip_prices === 'object') {
+            // Buscamos el precio redondo en la base de datos
+            const roundPrice = Number(t.round_trip_prices[destination]);
+            if (roundPrice > 0) finalPrice = roundPrice;
+          }
+
           return {
             id: t.id,
             origin: origin,
@@ -142,7 +167,7 @@ export default function SearchResultsScreen() {
             departureTime: segmentData.dep,
             arrivalTime: segmentData.arr,
             duration: segmentData.dur,
-            price: segmentData.price,
+            price: finalPrice, // Este es el precio que se le cobrará
             availableSeats: t.available_seats,
             totalSeats: t.total_seats,
             busType: t.bus_type,
@@ -151,17 +176,16 @@ export default function SearchResultsScreen() {
           };
         });
 
-        // 4. Verificamos reservas para no sobre-vender
         const tripIds = formattedTrips.map((t) => t.id);
+        
         const { data: bookingsData, error: bookingsError } = await supabase
           .from("bookings")
-          .select("trip_id, status, seats, trip:trips(origin, destination)")
+          .select("trip_id, status, seats, trip:trips!bookings_trip_id_fkey(origin, destination)")
           .in("trip_id", tripIds)
           .neq("status", "cancelled");
 
         let updatedTrips = formattedTrips;
         
-        // Si hay reservas, descontamos los asientos
         if (!bookingsError && bookingsData) {
           updatedTrips = formattedTrips.map((trip) => {
             const tripBookings = bookingsData
@@ -189,19 +213,26 @@ export default function SearchResultsScreen() {
     };
 
     fetchAndCalculateTrips();
-  }, [origin, destination, date]);
+  }, [origin, destination, date, isRoundTrip]); // <-- Agregamos isRoundTrip aquí
 
   const handleSelect = (trip: Trip) => {
     if (trip.availableSeats <= 0) return; 
 
     setPendingTrip(trip);
     setPendingSeats([]);
-    router.push("/seat-selection"); // Avanzamos a los asientos
+    
+    // --- MAGIA: Mandamos el estado de viaje redondo hacia la selección de asientos ---
+    router.push({
+      pathname: "/seat-selection",
+      params: { 
+        isRoundTrip,
+        returnDate
+      }
+    }); 
   };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* HEADER ELEGANTE */}
       <View
         style={[
           styles.header,
@@ -226,7 +257,7 @@ export default function SearchResultsScreen() {
             {origin} a {destination}
           </Text>
           <Text style={[styles.dateText, { color: colors.primary }]}>
-            {formattedDate}
+            {formattedDate} {isRoundTrip === "true" ? "(Ida y Vuelta)" : ""}
           </Text>
         </View>
       </View>

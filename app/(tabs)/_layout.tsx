@@ -24,16 +24,18 @@ function NativeTabLayout() {
         <Icon sf={{ default: "ticket", selected: "ticket.fill" }} />
         <Label>Mis Viajes</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="notifications">
-        <Icon sf={{ default: "bell", selected: "bell.fill" }} />
-        <Label>Notif.</Label>
+      
+      {/* MAGIA: Pestaña de Paquetería Nativa */}
+      <NativeTabs.Trigger name="paqueteria">
+        <Icon sf={{ default: "shippingbox", selected: "shippingbox.fill" }} />
+        <Label>Paquetes</Label>
       </NativeTabs.Trigger>
+      
       <NativeTabs.Trigger name="profile">
         <Icon sf={{ default: "person", selected: "person.fill" }} />
         <Label>Perfil</Label>
       </NativeTabs.Trigger>
       
-      {/* MAGIA 1: Si es admin, renderizamos la pestaña entera para iOS, si no, no existe */}
       {isAdmin && (
         <NativeTabs.Trigger name="admin">
           <Icon sf={{ default: "shield", selected: "shield.fill" }} />
@@ -113,18 +115,21 @@ function ClassicTabLayout() {
             ),
         }}
       />
+      
+      {/* MAGIA: Pestaña de Paquetería Clásica (Android/Web) */}
       <Tabs.Screen
-        name="notifications"
+        name="paqueteria"
         options={{
-          title: "Notif.",
+          title: "Paquetes",
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="bell" tintColor={color} size={22} />
+              <SymbolView name="shippingbox" tintColor={color} size={22} />
             ) : (
-              <Feather name="bell" size={22} color={color} />
+              <Feather name="package" size={22} color={color} />
             ),
         }}
       />
+
       <Tabs.Screen
         name="profile"
         options={{
@@ -137,11 +142,19 @@ function ClassicTabLayout() {
             ),
         }}
       />
+
+      {/* Ocultamos las notificaciones por ahora para dar espacio a Paquetería */}
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          href: null,
+        }}
+      />
+
       <Tabs.Screen
         name="admin"
         options={{
           title: "Admin",
-          // MAGIA 2: Ruta exacta si es admin, nulo si no lo es (para Android/Web)
           href: isAdmin ? '/(tabs)/admin' : null, 
           tabBarIcon: ({ color }) =>
             isIOS ? (
@@ -155,7 +168,6 @@ function ClassicTabLayout() {
   );
 }
 
-// --- QUEDÓ TOTALMENTE LIMPIO ---
 export default function TabLayout() {
   if (isLiquidGlassAvailable()) {
     return <NativeTabLayout />;

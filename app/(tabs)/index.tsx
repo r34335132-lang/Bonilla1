@@ -10,6 +10,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -24,7 +25,6 @@ import { POPULAR_ROUTES } from "@/data/trips";
 import { supabase } from "@/lib/supabase"; 
 import { BONILLA_ROUTE } from "@/utils/routeLogic"; 
 
-// --- SOLUCIÓN ZONA HORARIA (Evita que busque un día antes/después) ---
 const getLocalDateString = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -34,21 +34,19 @@ const getLocalDateString = (date: Date) => {
 
 const TODAY = getLocalDateString(new Date());
 
-// --- MAGIA: TIEMPOS DE LA RUTA EN MINUTOS DESDE DURANGO ---
 const ROUTE_OFFSETS: Record<string, number> = {
   "Durango": 0,
-  "Nombre de Dios": 45,       // 45 mins
-  "Vicente Guerrero": 75,     // 1h 15m
-  "Sombrerete": 135,          // 2h 15m
-  "Río Florido": 180,         // 3h
-  "Fresnillo": 240,           // 4h
-  "Zacatecas": 285,           // 4h 45m
-  "Aguascalientes": 405,      // 6h 45m
-  "San Juan de los Lagos": 480, // 8h
-  "Guadalajara": 600,         // 10h (Ej: de 20:00 a 06:00)
+  "Nombre de Dios": 45,
+  "Vicente Guerrero": 75,
+  "Sombrerete": 135,
+  "Río Florido": 180,
+  "Fresnillo": 240,
+  "Zacatecas": 285,
+  "Aguascalientes": 405,
+  "San Juan de los Lagos": 480,
+  "Guadalajara": 600,
 };
 
-// Función maestra para calcular los tiempos y precios del tramo
 const calculateSegmentData = (baseDepartureTime: string, basePrice: number, origin: string, destination: string) => {
   if (!baseDepartureTime) return { dep: "", arr: "", dur: "", price: basePrice };
   
@@ -58,7 +56,6 @@ const calculateSegmentData = (baseDepartureTime: string, basePrice: number, orig
   const originOffset = ROUTE_OFFSETS[origin] || 0;
   const destOffset = ROUTE_OFFSETS[destination] || 0;
 
-  // Calculamos horas de salida y llegada reales
   const depTotal = baseMinutes + originOffset;
   const arrTotal = baseMinutes + destOffset;
 
@@ -68,21 +65,19 @@ const calculateSegmentData = (baseDepartureTime: string, basePrice: number, orig
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   };
 
-  // Calculamos la duración en texto (Ej: 2h 30m)
   const durationMins = destOffset - originOffset;
   const durH = Math.floor(durationMins / 60);
   const durM = durationMins % 60;
   const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
 
-  // Calculamos precio dinámico (Proporcional a la distancia)
-  const tripTotalMins = 600; // Lo que dura toda la ruta maestra
-  const calculatedPrice = Math.round(((basePrice / tripTotalMins) * durationMins) / 10) * 10; // Redondeado a 10s
+  const tripTotalMins = 600; 
+  const calculatedPrice = Math.round(((basePrice / tripTotalMins) * durationMins) / 10) * 10; 
 
   return {
     dep: formatTime(depTotal),
     arr: formatTime(arrTotal),
     dur: durText,
-    price: calculatedPrice || basePrice // Si algo falla, cobra el precio base
+    price: calculatedPrice || basePrice 
   };
 };
 
@@ -110,17 +105,19 @@ export default function HomeScreen() {
   const [destination, setDestination] = useState("Guadalajara");
   const [isSearching, setIsSearching] = useState(false);
   
-  const [pickerType, setPickerType] = useState<"origin" | "destination" | null>(null);
+  // --- NUEVOS ESTADOS PARA VIAJE REDONDO ---
+  const [isRoundTrip, setIsRoundTrip] = useState(false);
   const [dateObj, setDateObj] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [returnDateObj, setReturnDateObj] = useState(new Date());
+  
+  const [pickerType, setPickerType] = useState<"origin" | "destination" | null>(null);
+  const [datePickerType, setDatePickerType] = useState<"departure" | "return" | null>(null);
 
-  const dateInput = dateObj.toLocaleDateString("es-MX", {
-    weekday: "short",
-    day: "numeric",
-    month: "long",
-  });
+  const dateInput = dateObj.toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "long" });
+  const returnDateInput = returnDateObj.toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "long" });
   
   const formattedSearchDate = getLocalDateString(dateObj);
+  const formattedReturnDate = getLocalDateString(returnDateObj);
   const isToday = formattedSearchDate === TODAY;
 
   const handleSwap = () => {
@@ -129,21 +126,23 @@ export default function HomeScreen() {
   };
 
   const handleSearch = async () => {
+    if (isRoundTrip && formattedReturnDate < formattedSearchDate) {
+      Alert.alert("Fecha inválida", "La fecha de regreso no puede ser anterior a la de ida.");
+      return;
+    }
+
     setIsSearching(true);
-    
     try {
       const searchStart = BONILLA_ROUTE.indexOf(origin);
       const searchEnd = BONILLA_ROUTE.indexOf(destination);
 
       if (searchStart === -1 || searchEnd === -1 || searchStart >= searchEnd) {
-        Alert.alert(
-          "Ruta no disponible", 
-          "Verifica que el destino vaya después del origen en la ruta seleccionada."
-        );
+        Alert.alert("Ruta no disponible", "Verifica que el destino vaya después del origen en la ruta seleccionada.");
         setIsSearching(false);
         return;
       }
 
+      // 1. Buscamos los viajes de IDA
       const { data, error } = await supabase
         .from("trips")
         .select("*")
@@ -158,8 +157,15 @@ export default function HomeScreen() {
       });
 
       const formattedTrips = validTrips.map(t => {
-        // AQUÍ ESTÁ LA MAGIA QUE CREA HORAS Y PRECIOS DINÁMICOS
         const segmentData = calculateSegmentData(t.departure_time, t.price, origin, destination);
+        
+        // Si es viaje redondo, intentamos buscar el precio especial del JSON si existe, si no, usa el normal
+        let finalPrice = segmentData.price;
+        if (isRoundTrip && t.round_trip_prices && t.round_trip_prices[destination]) {
+           finalPrice = Number(t.round_trip_prices[destination]);
+        } else if (!isRoundTrip && t.prices && t.prices[destination]) {
+           finalPrice = Number(t.prices[destination]);
+        }
 
         return {
           id: t.id,
@@ -169,7 +175,7 @@ export default function HomeScreen() {
           departureTime: segmentData.dep,
           arrivalTime: segmentData.arr,
           duration: segmentData.dur,
-          price: segmentData.price, 
+          price: finalPrice, 
           availableSeats: t.available_seats,
           totalSeats: t.total_seats,
           busType: t.bus_type,
@@ -178,9 +184,17 @@ export default function HomeScreen() {
         };
       });
 
+      // Enviamos TODO a search-results
       router.push({
         pathname: "/search-results",
-        params: { origin, destination, date: formattedSearchDate, results: JSON.stringify(formattedTrips) },
+        params: { 
+          origin, 
+          destination, 
+          date: formattedSearchDate, 
+          isRoundTrip: isRoundTrip ? "true" : "false",
+          returnDate: isRoundTrip ? formattedReturnDate : undefined,
+          results: JSON.stringify(formattedTrips) 
+        },
       });
 
     } catch (err) {
@@ -198,10 +212,18 @@ export default function HomeScreen() {
 
   const onChangeDate = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
-      setShowDatePicker(false);
+      setDatePickerType(null);
     }
     if (selectedDate) {
-      setDateObj(selectedDate);
+      if (datePickerType === "departure") {
+        setDateObj(selectedDate);
+        // Si la ida ahora es DESPUÉS del regreso, empujamos el regreso hacia adelante
+        if (isRoundTrip && selectedDate > returnDateObj) {
+          setReturnDateObj(selectedDate);
+        }
+      } else if (datePickerType === "return") {
+        setReturnDateObj(selectedDate);
+      }
     }
   };
 
@@ -212,20 +234,13 @@ export default function HomeScreen() {
   };
 
   const userName = user?.user_metadata?.name || "Viajero";
-
-  const greeting = user
-    ? `Hola, ${userName.split(" ")[0]}`
-    : isGuest
-    ? "Hola, invitado"
-    : "Busca tu viaje";
+  const greeting = user ? `Hola, ${userName.split(" ")[0]}` : isGuest ? "Hola, invitado" : "Busca tu viaje";
 
   return (
     <>
       <ScrollView
         style={[styles.container, { backgroundColor: colors.background }]}
-        contentContainerStyle={{
-          paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 100),
-        }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 100) }}
         showsVerticalScrollIndicator={false}
         overScrollMode="never"
       >
@@ -237,11 +252,7 @@ export default function HomeScreen() {
           end={{ x: 1, y: 1 }}
           style={[
             styles.header,
-            {
-              paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20),
-              borderBottomLeftRadius: 40,
-              borderBottomRightRadius: 40,
-            },
+            { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20), borderBottomLeftRadius: 40, borderBottomRightRadius: 40 },
           ]}
         >
           <View style={styles.headerTop}>
@@ -250,96 +261,67 @@ export default function HomeScreen() {
               <Text style={styles.headerSub}>¿A dónde viajamos hoy?</Text>
             </View>
             <TouchableOpacity
-              style={[
-                styles.badge,
-                { backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 24 },
-              ]}
+              style={[styles.badge, { backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 24 }]}
               onPress={() => router.push("/(tabs)/profile")}
               activeOpacity={0.8}
             >
-              <Feather
-                name={role === "admin" ? "shield" : isGuest ? "user" : "user-check"}
-                size={20}
-                color="#fff"
-              />
+              <Feather name={role === "admin" ? "shield" : isGuest ? "user" : "user-check"} size={20} color="#fff" />
             </TouchableOpacity>
           </View>
 
-          <View
-            style={[
-              styles.searchCard,
-              {
-                backgroundColor: colors.card,
-                borderRadius: 28,
-                marginTop: 28,
-                shadowColor: colors.primary, 
-              },
-            ]}
-          >
+          <View style={[styles.searchCard, { backgroundColor: colors.card, borderRadius: 28, marginTop: 28, shadowColor: colors.primary }]}>
+            
             <View style={styles.routeContainer}>
-              <TouchableOpacity 
-                style={styles.inputWrapper} 
-                activeOpacity={0.7}
-                onPress={() => setPickerType("origin")}
-              >
+              <TouchableOpacity style={styles.inputWrapper} activeOpacity={0.7} onPress={() => setPickerType("origin")}>
                 <View style={[styles.iconContainer, { backgroundColor: colors.muted }]}>
                   <Feather name="map-pin" size={18} color={colors.mutedForeground} />
                 </View>
                 <View style={styles.routeField}>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>
-                    Origen
-                  </Text>
-                  <Text style={[styles.fieldText, { color: colors.foreground }]}>
-                    {origin}
-                  </Text>
+                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Origen</Text>
+                  <Text style={[styles.fieldText, { color: colors.foreground }]}>{origin}</Text>
                 </View>
               </TouchableOpacity>
 
               <View style={styles.swapBtnContainer}>
-                <TouchableOpacity
-                  onPress={handleSwap}
-                  style={[
-                    styles.swapBtn,
-                    { backgroundColor: colors.secondary, borderRadius: 20 },
-                  ]}
-                  activeOpacity={0.7}
-                >
+                <TouchableOpacity onPress={handleSwap} style={[styles.swapBtn, { backgroundColor: colors.secondary, borderRadius: 20 }]} activeOpacity={0.7}>
                   <Feather name="repeat" size={18} color={colors.primary} />
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity 
-                style={styles.inputWrapper} 
-                activeOpacity={0.7}
-                onPress={() => setPickerType("destination")}
-              >
+              <TouchableOpacity style={styles.inputWrapper} activeOpacity={0.7} onPress={() => setPickerType("destination")}>
                 <View style={[styles.iconContainer, { backgroundColor: colors.secondary }]}>
                   <Feather name="map" size={18} color={colors.primary} />
                 </View>
                 <View style={styles.routeField}>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>
-                    Destino
-                  </Text>
-                  <Text style={[styles.fieldText, { color: colors.foreground }]}>
-                    {destination}
-                  </Text>
+                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Destino</Text>
+                  <Text style={[styles.fieldText, { color: colors.foreground }]}>{destination}</Text>
                 </View>
               </TouchableOpacity>
             </View>
 
             <View style={[styles.divider, { backgroundColor: colors.muted }]} />
 
-            <TouchableOpacity 
-              style={styles.dateRow} 
-              activeOpacity={0.7}
-              onPress={() => setShowDatePicker(true)}
-            >
+            {/* --- SWITCH DE VIAJE REDONDO --- */}
+            <View style={styles.tripTypeRow}>
+              <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginBottom: 0 }]}>
+                Añadir viaje de regreso
+              </Text>
+              <Switch
+                value={isRoundTrip}
+                onValueChange={setIsRoundTrip}
+                trackColor={{ false: colors.muted, true: colors.primary }}
+                thumbColor={Platform.OS === 'ios' ? "#fff" : isRoundTrip ? colors.primary : "#f4f3f4"}
+              />
+            </View>
+
+            {/* --- FECHA DE IDA --- */}
+            <TouchableOpacity style={styles.dateRow} activeOpacity={0.7} onPress={() => setDatePickerType("departure")}>
               <View style={[styles.iconContainer, { backgroundColor: colors.muted }]}>
                 <Feather name="calendar" size={18} color={colors.mutedForeground} />
               </View>
               <View>
                 <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>
-                  Fecha de salida
+                  {isRoundTrip ? "Fecha de Ida" : "Fecha de Salida"}
                 </Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Text style={[styles.dateText, { color: colors.foreground, textTransform: "capitalize" }]}>
@@ -354,24 +336,34 @@ export default function HomeScreen() {
               </View>
             </TouchableOpacity>
 
-            {showDatePicker && (
+            {/* --- FECHA DE REGRESO --- */}
+            {isRoundTrip && (
+              <TouchableOpacity style={styles.dateRow} activeOpacity={0.7} onPress={() => setDatePickerType("return")}>
+                <View style={[styles.iconContainer, { backgroundColor: colors.secondary }]}>
+                  <Feather name="calendar" size={18} color={colors.primary} />
+                </View>
+                <View>
+                  <Text style={[styles.fieldLabel, { color: colors.primary }]}>Fecha de Regreso</Text>
+                  <Text style={[styles.dateText, { color: colors.foreground, textTransform: "capitalize" }]}>
+                    {returnDateInput}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {datePickerType !== null && (
               <DateTimePicker
-                value={dateObj}
+                value={datePickerType === "departure" ? dateObj : returnDateObj}
                 mode="date"
                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                minimumDate={new Date()}
+                minimumDate={datePickerType === "departure" ? new Date() : dateObj} // El regreso no puede ser antes de la ida
                 onChange={onChangeDate}
               />
             )}
 
-            {Platform.OS === 'ios' && showDatePicker && (
-              <TouchableOpacity 
-                style={styles.iosDateDoneBtn} 
-                onPress={() => setShowDatePicker(false)}
-              >
-                <Text style={[styles.iosDateDoneText, { color: colors.primary }]}>
-                  Confirmar fecha
-                </Text>
+            {Platform.OS === 'ios' && datePickerType !== null && (
+              <TouchableOpacity style={styles.iosDateDoneBtn} onPress={() => setDatePickerType(null)}>
+                <Text style={[styles.iosDateDoneText, { color: colors.primary }]}>Confirmar fecha</Text>
               </TouchableOpacity>
             )}
 
@@ -383,36 +375,16 @@ export default function HomeScreen() {
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-              Inspírate a viajar
-            </Text>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Inspírate a viajar</Text>
             <Feather name="compass" size={20} color={colors.primary} />
           </View>
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 20, gap: 16 }}
-            style={{ marginHorizontal: -20, paddingBottom: 10 }}
-          >
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 16 }} style={{ marginHorizontal: -20, paddingBottom: 10 }}>
             {POPULAR_ROUTES.map(({ origin: o, destination: d }) => {
               const imageUrl = ROUTE_IMAGES[d] || ROUTE_IMAGES["Default"];
-              
               return (
-                <TouchableOpacity
-                  key={`${o}-${d}`}
-                  onPress={() => handlePopularRoute(o, d)}
-                  activeOpacity={0.8}
-                  style={[styles.routeCardWrapper, { shadowColor: colors.foreground }]}
-                >
-                  <ImageBackground
-                    source={{ uri: imageUrl }}
-                    style={styles.routeCardImg}
-                    imageStyle={{ borderRadius: 20 }}
-                  >
-                    <LinearGradient
-                      colors={["transparent", "rgba(0,0,0,0.85)"]}
-                      style={styles.routeCardGradient}
-                    >
+                <TouchableOpacity key={`${o}-${d}`} onPress={() => handlePopularRoute(o, d)} activeOpacity={0.8} style={[styles.routeCardWrapper, { shadowColor: colors.foreground }]}>
+                  <ImageBackground source={{ uri: imageUrl }} style={styles.routeCardImg} imageStyle={{ borderRadius: 20 }}>
+                    <LinearGradient colors={["transparent", "rgba(0,0,0,0.85)"]} style={styles.routeCardGradient}>
                       <Text style={styles.routeCardOrigin}>{o}</Text>
                       <Feather name="arrow-down" size={14} color="rgba(255,255,255,0.7)" style={{ marginVertical: 4 }} />
                       <Text style={styles.routeCardDest}>{d}</Text>
@@ -425,9 +397,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={[styles.section, { paddingTop: 24 }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-            Viaja con nosotros
-          </Text>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Viaja con nosotros</Text>
           <View style={styles.featuresGrid}>
             {[
               { icon: "shield", title: "Seguridad", desc: "Flotilla moderna" },
@@ -435,34 +405,12 @@ export default function HomeScreen() {
               { icon: "wifi", title: "Comodidad", desc: "WiFi y USB" },
               { icon: "credit-card", title: "Pago Flexible", desc: "Tarjeta o efectivo" },
             ].map(({ icon, title, desc }) => (
-              <View
-                key={title}
-                style={[
-                  styles.featureCard,
-                  {
-                    backgroundColor: colors.card,
-                    borderRadius: 24,
-                    shadowColor: "#000",
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.featureIconBox,
-                    {
-                      backgroundColor: colors.secondary,
-                      borderRadius: 16,
-                    },
-                  ]}
-                >
+              <View key={title} style={[styles.featureCard, { backgroundColor: colors.card, borderRadius: 24, shadowColor: "#000" }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.secondary, borderRadius: 16 }]}>
                   <Feather name={icon as any} size={22} color={colors.primary} />
                 </View>
-                <Text style={[styles.featureTitle, { color: colors.foreground }]}>
-                  {title}
-                </Text>
-                <Text style={[styles.featureDesc, { color: colors.mutedForeground }]}>
-                  {desc}
-                </Text>
+                <Text style={[styles.featureTitle, { color: colors.foreground }]}>{title}</Text>
+                <Text style={[styles.featureDesc, { color: colors.mutedForeground }]}>{desc}</Text>
               </View>
             ))}
           </View>
@@ -470,23 +418,15 @@ export default function HomeScreen() {
       </ScrollView>
 
       {/* --- MODAL PARA SELECCIONAR CIUDAD --- */}
-      <Modal
-        visible={pickerType !== null}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setPickerType(null)}
-      >
+      <Modal visible={pickerType !== null} transparent={true} animationType="slide" onRequestClose={() => setPickerType(null)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, paddingBottom: insets.bottom || 24 }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.foreground }]}>
-                Selecciona {pickerType === "origin" ? "Origen" : "Destino"}
-              </Text>
+              <Text style={[styles.modalTitle, { color: colors.foreground }]}>Selecciona {pickerType === "origin" ? "Origen" : "Destino"}</Text>
               <TouchableOpacity onPress={() => setPickerType(null)} style={styles.modalCloseBtn}>
                 <Feather name="x" size={24} color={colors.foreground} />
               </TouchableOpacity>
             </View>
-            
             <FlatList
               data={BONILLA_ROUTE}
               keyExtractor={(item) => item}
@@ -495,16 +435,10 @@ export default function HomeScreen() {
                 const isSelected = item === (pickerType === "origin" ? origin : destination);
                 return (
                   <TouchableOpacity
-                    style={[
-                      styles.cityOption,
-                      { borderBottomColor: colors.border },
-                      isSelected && { backgroundColor: colors.secondary }
-                    ]}
+                    style={[styles.cityOption, { borderBottomColor: colors.border }, isSelected && { backgroundColor: colors.secondary }]}
                     onPress={() => handleCitySelect(item)}
                   >
-                    <Text style={[styles.cityOptionText, { color: isSelected ? colors.primary : colors.foreground }]}>
-                      {item}
-                    </Text>
+                    <Text style={[styles.cityOptionText, { color: isSelected ? colors.primary : colors.foreground }]}>{item}</Text>
                     {isSelected && <Feather name="check" size={20} color={colors.primary} />}
                   </TouchableOpacity>
                 );
@@ -530,13 +464,14 @@ const styles = StyleSheet.create({
   iconContainer: { width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   routeField: { flex: 1 },
   fieldLabel: { fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 },
-  
   fieldText: { fontSize: 18, fontWeight: "700", paddingVertical: Platform.OS === 'ios' ? 4 : 0 },
-  
   swapBtnContainer: { position: "absolute", right: 0, top: "50%", marginTop: -28, zIndex: 10 },
   swapBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 5 },
   divider: { height: 1, marginBottom: 20, marginTop: 4 },
-  dateRow: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 24 },
+  
+  tripTypeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  
+  dateRow: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 20 },
   dateText: { fontSize: 17, fontWeight: "700" },
   todayBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   todayBadgeText: { fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
@@ -555,7 +490,6 @@ const styles = StyleSheet.create({
   featureIconBox: { width: 48, height: 48, alignItems: "center", justifyContent: "center", marginBottom: 16 },
   featureTitle: { fontSize: 16, fontWeight: "800", marginBottom: 6 },
   featureDesc: { fontSize: 13, lineHeight: 18 },
-
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
   modalContent: { borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: "80%", paddingTop: 24, paddingHorizontal: 20 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },

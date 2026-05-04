@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -17,14 +17,20 @@ import { SeatMap } from "@/components/SeatMap";
 import { useBooking } from "@/contexts/BookingContext";
 import { useColors } from "@/hooks/useColors";
 import { supabase } from "@/lib/supabase"; 
-import { getOccupiedSeatsForSegment } from "@/utils/routeLogic"; // <-- IMPORTAMOS LA MAGIA
+import { getOccupiedSeatsForSegment } from "@/utils/routeLogic"; 
 
 export default function SeatSelectionScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  
+  // Recibimos los parámetros de si es Viaje Redondo
+  const { isRoundTrip, returnDate } = useLocalSearchParams<{
+    isRoundTrip?: string;
+    returnDate?: string;
+  }>();
+  
   const { pendingTrip, pendingSeats, setPendingSeats } = useBooking();
 
-  // --- NUEVOS ESTADOS PARA EL CÁLCULO DE TRAMOS ---
   const [realOccupiedSeats, setRealOccupiedSeats] = useState<number[]>([]);
   const [isCalculating, setIsCalculating] = useState(true);
 
@@ -34,16 +40,16 @@ export default function SeatSelectionScreen() {
     const fetchAndCalculateSeats = async () => {
       setIsCalculating(true);
       try {
-        // 1. Traemos TODAS las reservas activas para este camión exacto
+        // --- AQUÍ ESTÁ LA SOLUCIÓN AL ERROR QUE CONGELABA LA PANTALLA ---
+        // Agregamos !bookings_trip_id_fkey para que Supabase sepa qué viaje revisar
         const { data, error } = await supabase
           .from("bookings")
-          .select("status, seats, trip:trips(origin, destination)")
+          .select("status, seats, trip:trips!bookings_trip_id_fkey(origin, destination)")
           .eq("trip_id", pendingTrip.id)
-          .neq("status", "cancelled"); // Ignoramos cancelados
+          .neq("status", "cancelled"); 
 
         if (error) throw error;
 
-        // 2. Formateamos los datos para nuestra función matemática
         const formattedBookings = data.map((b: any) => ({
           status: b.status,
           seats: b.seats,
@@ -53,7 +59,6 @@ export default function SeatSelectionScreen() {
           },
         }));
 
-        // 3. Calculamos qué asientos están REALMENTE ocupados para el tramo que el usuario quiere
         const occupied = getOccupiedSeatsForSegment(
           formattedBookings,
           pendingTrip.origin,
@@ -62,7 +67,6 @@ export default function SeatSelectionScreen() {
 
         setRealOccupiedSeats(occupied);
 
-        // 4. Por seguridad: Si alguien le ganó un asiento mientras pensaba, lo quitamos de su selección
         const stillAvailableSelected = pendingSeats.filter(
           (s) => !occupied.includes(s)
         );
@@ -96,16 +100,21 @@ export default function SeatSelectionScreen() {
   };
 
   const handleContinue = () => {
-    router.push("/checkout");
+    // Llevamos los parámetros de "Ida y Vuelta" hacia la pantalla de pago
+    router.push({
+      pathname: "/checkout",
+      params: {
+        isRoundTrip,
+        returnDate
+      }
+    });
   };
 
   const totalPrice = pendingSeats.length * pendingTrip.price;
-  // Calculamos los disponibles reales (Total de asientos - Los que el algoritmo detectó como ocupados)
   const realAvailableSeats = pendingTrip.totalSeats - realOccupiedSeats.length;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* HEADER ELEGANTE */}
       <View
         style={[
           styles.header,
@@ -151,7 +160,6 @@ export default function SeatSelectionScreen() {
           ]}
           showsVerticalScrollIndicator={false}
         >
-          {/* TARJETA DE INFORMACIÓN DEL VIAJE */}
           <View
             style={[
               styles.busInfo,
@@ -203,13 +211,12 @@ export default function SeatSelectionScreen() {
           <View style={styles.seatMapContainer}>
             <SeatMap
               totalSeats={pendingTrip.totalSeats}
-              occupiedSeats={realOccupiedSeats} // <-- PASAMOS LOS ASIENTOS CALCULADOS POR TRAMO
+              occupiedSeats={realOccupiedSeats} 
               selectedSeats={pendingSeats}
               onToggleSeat={handleToggleSeat}
             />
           </View>
 
-          {/* ETIQUETA DE ASIENTOS SELECCIONADOS */}
           {pendingSeats.length > 0 ? (
             <View
               style={[
@@ -236,7 +243,6 @@ export default function SeatSelectionScreen() {
         </ScrollView>
       )}
 
-      {/* BARRA INFERIOR FLOTANTE DE PAGO */}
       {pendingSeats.length > 0 && !isCalculating ? (
         <View
           style={[
@@ -281,83 +287,23 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 10,
   },
-  backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  backBtn: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   headerInfo: { alignItems: "center" },
   headerTitle: { fontSize: 18, fontWeight: "800", letterSpacing: -0.3 },
   headerSub: { fontSize: 13, fontWeight: "600", marginTop: 2 },
   scroll: { padding: 20 },
-  
-  busInfo: {
-    padding: 20,
-    borderRadius: 24,
-    marginBottom: 24,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 16,
-    elevation: 3,
-  },
-  busInfoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  busInfo: { padding: 20, borderRadius: 24, marginBottom: 24, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.05, shadowRadius: 16, elevation: 3 },
+  busInfoRow: { flexDirection: "row", justifyContent: "space-between" },
   busInfoItem: { alignItems: "center", gap: 4, flex: 1 },
-  iconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 4,
-  },
+  iconBox: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   busInfoLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
   busInfoValue: { fontSize: 16, fontWeight: "800" },
-  
-  seatMapContainer: {
-    paddingHorizontal: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  
-  selectedInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 16,
-    marginTop: 24,
-  },
-  selectedIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  seatMapContainer: { paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
+  selectedInfo: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16, marginTop: 24 },
+  selectedIconBox: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   selectedTitle: { fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
   selectedSeats: { fontSize: 18, fontWeight: "800", marginTop: 2 },
-  
-  footer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 10,
-  },
+  footer: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24, paddingTop: 20, borderTopLeftRadius: 32, borderTopRightRadius: 32, shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.08, shadowRadius: 20, elevation: 10 },
   footerInfo: { alignItems: "flex-start" },
   footerSeats: { fontSize: 13, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 },
   footerTotal: { fontSize: 24, fontWeight: "800", marginTop: 2, letterSpacing: -0.5 },
