@@ -26,9 +26,11 @@ export default function CheckoutScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  const { isRoundTrip, returnDate } = useLocalSearchParams<{
+  // AHORA RECIBIMOS TAMBIÉN is15Days DESDE EL BUSCADOR
+  const { isRoundTrip, returnDate, is15Days } = useLocalSearchParams<{
     isRoundTrip?: string;
     returnDate?: string;
+    is15Days?: string; // <-- NUEVO
   }>();
 
   const { user, isGuest, guestInfo, setGuestInfo } = useAuth();
@@ -55,7 +57,17 @@ export default function CheckoutScreen() {
     return null;
   }
 
-  const totalPrice = pendingSeats.length * pendingTrip.price;
+  // --- LÓGICA DE PRECIOS DINÁMICOS ---
+  // Iniciamos con el precio base
+  let unitPrice = pendingTrip.price;
+  
+  // Si eligió 15 días, cambiamos el precio por el precio especial de 15 días (si existe, si no, usa el base)
+  if (is15Days === "true" && pendingTrip.price_15_days) {
+    unitPrice = pendingTrip.price_15_days;
+  }
+  // (Aquí puedes agregar más adelante la lógica del precio redondo si la ocupas)
+
+  const totalPrice = pendingSeats.length * unitPrice;
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -86,23 +98,22 @@ export default function CheckoutScreen() {
         status: "pending", 
         userId: user?.id ?? null,
         isGuest: !user,
-        totalPrice,
+        totalPrice, // Usamos el total ya modificado con el precio de 15 días
       });
 
+      // Le decimos a Supabase qué tipo de viaje fue
       if (isRoundTrip === "true") {
-        await supabase
-          .from('bookings')
-          .update({ is_round_trip: true })
-          .eq('booking_ref', booking.id);
+        await supabase.from('bookings').update({ is_round_trip: true }).eq('booking_ref', booking.id);
+      } else if (is15Days === "true") {
+        await supabase.from('bookings').update({ is_15_days: true }).eq('booking_ref', booking.id); // <-- GUARDAMOS 15 DIAS
       }
 
       if (paymentMethod === "card") {
-        // --- AHORA LLAMAMOS A CLIP ---
         const { data, error } = await supabase.functions.invoke('create-clip-payment', {
           body: {
-            title: `Viaje: ${pendingTrip.origin} a ${pendingTrip.destination}`,
+            title: `Viaje ${is15Days === 'true' ? '15 Días' : 'Sencillo'}: ${pendingTrip.origin} a ${pendingTrip.destination}`,
             quantity: pendingSeats.length,
-            price: pendingTrip.price,
+            price: unitPrice,
             email: email,
             bookingId: booking.id 
           }
@@ -110,7 +121,6 @@ export default function CheckoutScreen() {
 
         if (error) throw new Error(`Conexión fallida: ${error.message}`);
         if (data && data.ok === false) throw new Error(`Clip rechazó el pago: ${data.error}`);
-        // Clip devuelve la URL de pago en una variable que nombraremos payment_url
         if (!data?.payment_url) throw new Error("No se recibió el link seguro de pago de Clip.");
 
         await WebBrowser.openBrowserAsync(data.payment_url);
@@ -122,11 +132,7 @@ export default function CheckoutScreen() {
           .single();
 
         if (checkBooking?.status !== "confirmed") {
-          Alert.alert(
-            "Pago no completado", 
-            "Cerramos la ventana de pago. Tu reserva se guardó como pendiente de pago."
-          );
-          
+          Alert.alert("Pago no completado", "Cerramos la ventana de pago. Tu reserva se guardó como pendiente de pago.");
           router.navigate("/(tabs)/my-trips"); 
           return; 
         }
@@ -153,34 +159,17 @@ export default function CheckoutScreen() {
       <View
         style={[
           styles.header,
-          {
-            paddingTop: insets.top + (Platform.OS === "web" ? 67 : 12),
-            backgroundColor: colors.card,
-            shadowColor: "#000",
-          },
+          { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 12), backgroundColor: colors.card, shadowColor: "#000" },
         ]}
       >
-        <TouchableOpacity 
-          onPress={() => router.back()} 
-          style={[styles.backBtn, { backgroundColor: colors.muted }]}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity onPress={() => router.back()} style={[styles.backBtn, { backgroundColor: colors.muted }]} activeOpacity={0.7}>
           <Feather name="chevron-left" size={24} color={colors.foreground} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>
-          Completar Reserva
-        </Text>
+        <Text style={[styles.headerTitle, { color: colors.foreground }]}>Completar Reserva</Text>
         <View style={{ width: 44 }} />
       </View>
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.scroll,
-          { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 100) },
-        ]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 100) }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <Section title="Resumen de tu viaje" icon="map" colors={colors}>
           <View style={[styles.tripSummary, { borderColor: colors.border }]}>
             <View style={styles.ticketHeader}>
@@ -205,7 +194,13 @@ export default function CheckoutScreen() {
                 <Text style={[styles.ticketValue, { color: colors.foreground }]}>{pendingTrip.date}</Text>
               </View>
               
-              {isRoundTrip === "true" && returnDate ? (
+              {/* MOSTRAMOS SI ES PAQUETE DE 15 DÍAS O REDONDO */}
+              {is15Days === "true" ? (
+                <View style={styles.ticketDetailCol}>
+                  <Text style={[styles.ticketLabel, { color: "#9b59b6" }]}>Tipo de Viaje</Text>
+                  <Text style={[styles.ticketValue, { color: "#9b59b6" }]}>Paquete 15 Días</Text>
+                </View>
+              ) : isRoundTrip === "true" && returnDate ? (
                 <View style={styles.ticketDetailCol}>
                   <Text style={[styles.ticketLabel, { color: colors.primary }]}>Día de regreso</Text>
                   <Text style={[styles.ticketValue, { color: colors.primary }]}>{returnDate}</Text>
@@ -224,9 +219,9 @@ export default function CheckoutScreen() {
           <View style={[styles.priceRow, { backgroundColor: colors.secondary }]}>
             <View>
               <Text style={[styles.priceLabel, { color: colors.primary }]}>Total a pagar</Text>
-              {isRoundTrip === "true" && (
-                <Text style={{fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '600'}}>
-                  (Incluye viaje redondo)
+              {is15Days === "true" && (
+                <Text style={{fontSize: 12, color: "#9b59b6", marginTop: 2, fontWeight: '600'}}>
+                  (Tarifa Especial 15 Días)
                 </Text>
               )}
             </View>
@@ -270,7 +265,6 @@ export default function CheckoutScreen() {
                   <Feather name={method === "card" ? "credit-card" : "dollar-sign"} size={18} color={paymentMethod === method ? "#fff" : colors.mutedForeground} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  {/* --- CAMBIO A CLIP --- */}
                   <Text style={[styles.paymentTitle, { color: paymentMethod === method ? colors.primary : colors.foreground }]}>
                     {method === "card" ? "Tarjeta (Clip)" : "Pago en Taquilla"}
                   </Text>

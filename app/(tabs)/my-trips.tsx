@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser"; 
-import * as Linking from "expo-linking"; // <-- IMPORTAMOS LINKING PARA LLAMADAS Y CORREOS
+import * as Linking from "expo-linking"; 
 import React, { useState } from "react";
 import {
   Alert,
@@ -41,7 +41,6 @@ export default function MyTripsScreen() {
     setHasSearched(true);
   };
 
-  // --- LA REGLA ESTRICTA DE CANCELACIÓN ---
   const handleCancel = (id: string) => {
     Alert.alert(
       "Políticas de Cancelación",
@@ -49,11 +48,11 @@ export default function MyTripsScreen() {
       [
         {
           text: "Llamar a Sucursal",
-          onPress: () => Linking.openURL("tel:+526180000000"), // PON AQUÍ TU TELÉFONO REAL
+          onPress: () => Linking.openURL("tel:+526180000000"), 
         },
         {
           text: "Enviar Correo",
-          onPress: () => Linking.openURL(`mailto:contacto@bonillatours.com?subject=Solicitud de Cancelación Folio ${id}`), // PON AQUÍ TU CORREO REAL
+          onPress: () => Linking.openURL(`mailto:contacto@bonillatours.com?subject=Solicitud de Cancelación Folio ${id}`), 
         },
         { 
           text: "Entendido", 
@@ -63,16 +62,23 @@ export default function MyTripsScreen() {
     );
   };
 
-  // --- FUNCIÓN PARA RETOMAR EL PAGO (ACTUALIZADA A CLIP) ---
   const handlePay = async (booking: Booking) => {
     try {
       Alert.alert("Conectando", "Generando tu link de pago seguro con Clip...");
       
+      // Verificamos si la reserva es de 15 días o redonda
+      const is15Days = (booking as any).is_15_days;
+      const isRoundTrip = (booking as any).is_round_trip;
+      const tipoViaje = is15Days ? '15 Días' : isRoundTrip ? 'Redondo' : 'Sencillo';
+
+      // Usamos el totalPrice guardado para asegurar que cobramos la tarifa correcta
+      const unitPrice = booking.totalPrice / booking.seats.length;
+
       const { data, error } = await supabase.functions.invoke('create-clip-payment', {
         body: {
-          title: `Viaje: ${booking.trip.origin} a ${booking.trip.destination}`,
+          title: `Viaje ${tipoViaje}: ${booking.trip.origin} a ${booking.trip.destination}`,
           quantity: booking.seats.length,
-          price: booking.trip.price,
+          price: unitPrice, 
           email: booking.passengerEmail,
           bookingId: booking.id 
         }
@@ -82,10 +88,8 @@ export default function MyTripsScreen() {
       if (data && data.ok === false) throw new Error(`Clip rechazó la petición: ${data.error}`);
       if (!data?.payment_url) throw new Error("No se recibió el link seguro de pago de Clip.");
 
-      // Abrimos la página oficial de pago de Clip
       await WebBrowser.openBrowserAsync(data.payment_url);
 
-      // Verificamos si pagó después de cerrar
       const { data: checkBooking } = await supabase
         .from('bookings')
         .select('status')
@@ -95,7 +99,6 @@ export default function MyTripsScreen() {
       if (checkBooking?.status === "confirmed") {
         Alert.alert("¡Éxito!", "Tu pago fue procesado correctamente y tu viaje está confirmado.");
         if (!user) {
-          // Refrescamos la lista si es invitado
           fetchGuestBookings(guestEmail.trim());
         }
       }
