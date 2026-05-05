@@ -1,8 +1,11 @@
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import React, { useEffect, useRef } from "react";
 import {
+  Alert,
   Animated,
   Platform,
   ScrollView,
@@ -58,6 +61,97 @@ export default function BookingSuccessScreen() {
     router.replace("/(tabs)/my-trips");
   };
 
+  // --- FUNCIÓN PARA GENERAR Y COMPARTIR EL PDF ---
+  const handlePrintBoleto = async () => {
+    if (!booking) return;
+    
+    try {
+      const is15Days = (booking as any).is15Days || (booking as any).is_15_days;
+      const isRoundTrip = (booking as any).isRoundTrip || (booking as any).is_round_trip;
+      const tipoViaje = is15Days ? 'Paquete 15 Días' : isRoundTrip ? 'Viaje Redondo' : 'Viaje Sencillo';
+      const asientosStr = booking.seats && booking.seats.length > 0 ? booking.seats.join(', ') : 'Asignado al abordar';
+      
+      const logoUrl = "https://gisyiiljfplywcfhxxem.supabase.co/storage/v1/object/public/fls/WhatsApp%20Image%202026-05-04%20at%205.53.38%20PM.jpeg"; 
+
+      const html = `
+        <html><head><style>
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: auto; }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
+          .header img { max-width: 280px; margin-bottom: 10px; }
+          .header h2 { margin: 5px 0 0 0; color: #555; font-size: 18px; letter-spacing: 2px; }
+          .content { display: flex; justify-content: space-between; }
+          .info { width: 65%; }
+          .qr-section { width: 30%; text-align: center; }
+          .qr-section img { width: 150px; height: 150px; margin-bottom: 10px; }
+          .row { margin-bottom: 15px; }
+          .label { font-size: 12px; color: #777; text-transform: uppercase; font-weight: bold; display: block; margin-bottom: 2px; }
+          .value { font-size: 18px; font-weight: bold; color: #000; }
+          .highlight { background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #b91c1c; }
+          .terms { margin-top: 40px; font-size: 11px; color: #555; border-top: 1px solid #ccc; padding-top: 20px; text-align: justify; line-height: 1.5; }
+          .terms h4 { margin-top: 0; color: #000; font-size: 14px; }
+        </style></head><body>
+          <div class="header">
+            <img src="${logoUrl}" alt="Bonilla Tours" />
+            <h2>BOLETO REGULAR</h2>
+          </div>
+          <div class="content">
+            <div class="info">
+              <div class="row">
+                <span class="label">Pasajero/a</span>
+                <span class="value">${booking.passengerName}</span>
+              </div>
+              <div class="row highlight">
+                <span class="label">Destino</span>
+                <span class="value" style="font-size: 24px;">${booking.trip.destination}</span>
+              </div>
+              <div class="row">
+                <span class="label">Fecha y hora de viaje</span>
+                <span class="value">${booking.trip.date} - ${booking.trip.departureTime}</span>
+              </div>
+              <div class="row">
+                <span class="label">Viaje</span>
+                <span class="value">Destino: ${booking.trip.destination} | ${tipoViaje}</span>
+              </div>
+              <div class="row" style="display: flex; gap: 40px;">
+                <div>
+                  <span class="label">Asiento(s)</span>
+                  <span class="value">${asientosStr}</span>
+                </div>
+                <div>
+                  <span class="label">Total Pagado</span>
+                  <span class="value">$ ${Number(booking.totalPrice).toFixed(2)} MXN</span>
+                </div>
+              </div>
+            </div>
+            <div class="qr-section">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${booking.id}" alt="QR Code" />
+              <div class="label">Folio de Reserva</div>
+              <div class="value" style="font-size: 16px;">${booking.id}</div>
+              <div style="margin-top: 20px; font-size: 12px; color: #666;">
+                <strong>Emitido:</strong><br/>${new Date(booking.createdAt).toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div class="terms">
+            <h4>TÉRMINOS Y CONDICIONES</h4>
+            <p>Deberá presentarse por lo menos 20 minutos antes del horario seleccionado en el punto de encuentro establecido en su reservación o itinerario.</p>
+            <p>Para abordar, deberá presentar el código QR de su reservación o el folio impreso en este boleto.</p>
+            <p>Para garantizar que los usuarios lleguen a tiempo a su destino, únicamente otorgamos 5 minutos de tolerancia en espera. Una vez transcurrido ese tiempo, el conductor dará comienzo al viaje. Situaciones excepcionales se valorarán y gestionarán de mutuo acuerdo entre empresa y usuarios.</p>
+            <p>Cabe tener en cuenta que algún punto de encuentro o descenso puede cambiar a causa de situaciones ajenas a la empresa, tales como obras, bloqueos, accidentes etc. En tal caso, se les informará a los usuarios con antelación si ello fuera posible. De otro modo, se acordará con los usuarios una opción conveniente.</p>
+            <h4 style="margin-top: 15px;">Cancelaciones</h4>
+            <p>Las cancelaciones tienen un costo del 10% (trámite exclusivo en oficina) y aplican siempre y cuando se soliciten con al menos 1 hora de anticipación a la salida.</p>
+          </div>
+        </body></html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "No se pudo generar el documento PDF.");
+    }
+  };
+
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
@@ -96,7 +190,6 @@ export default function BookingSuccessScreen() {
         </Text>
       </Animated.View>
 
-      {/* Condicional seguro para evitar el error de texto */}
       {booking ? (
         <View
           style={[
@@ -124,8 +217,6 @@ export default function BookingSuccessScreen() {
               {
                 icon: "map",
                 label: "Ruta",
-                // ¡AQUÍ ESTÁ LA CORRECCIÓN! 
-                // Lee el origen y destino directamente del trip de esta reserva específica (su tramo)
                 value: `${booking.trip.origin} a ${booking.trip.destination}`,
               },
               {
@@ -136,7 +227,7 @@ export default function BookingSuccessScreen() {
               {
                 icon: "grid",
                 label: "Asientos",
-                value: booking.seats.sort((a, b) => a - b).join(", "),
+                value: booking.seats && booking.seats.length > 0 ? booking.seats.sort((a, b) => a - b).join(", ") : "Sin asignar",
               },
               {
                 icon: "user",
@@ -146,9 +237,8 @@ export default function BookingSuccessScreen() {
               {
                 icon: "credit-card",
                 label: "Método de Pago",
-                value: booking.paymentMethod === "card" ? "Tarjeta (Pagado/Pendiente)" : "Efectivo (Pago en Taquilla)",
+                value: booking.paymentMethod === "card" ? "Tarjeta (Pagado)" : "Efectivo (Pago en Taquilla)",
               },
-              // --- NUEVA SECCIÓN PARA MOSTRAR SI ES DE 15 DÍAS ---
               ...(booking.is15Days ? [{
                 icon: "clock",
                 label: "Tipo de Boleto",
@@ -192,7 +282,6 @@ export default function BookingSuccessScreen() {
         </View>
       ) : null}
 
-      {/* Condicional seguro */}
       {isGuest ? (
         <View
           style={[
@@ -218,12 +307,21 @@ export default function BookingSuccessScreen() {
       ) : null}
 
       <View style={styles.actions}>
-        {/* Condicionales seguros */}
+        
+        {/* --- NUEVO BOTÓN PARA DESCARGAR PDF (Solo sale si ya está confirmado) --- */}
+        {booking?.status === "confirmed" && (
+          <AppButton
+            title="Descargar Boleto (PDF)"
+            onPress={handlePrintBoleto}
+            variant="primary"
+          />
+        )}
+
         {isGuest ? (
           <AppButton
             title="Crear cuenta gratis"
             onPress={handleCreateAccount}
-            variant="primary"
+            variant={booking?.status === "confirmed" ? "outline" : "primary"}
           />
         ) : null}
         
@@ -231,14 +329,14 @@ export default function BookingSuccessScreen() {
           <AppButton
             title="Ver mis viajes"
             onPress={handleViewTrips}
-            variant="primary"
+            variant={booking?.status === "confirmed" ? "outline" : "primary"}
           />
         ) : null}
         
         <AppButton
           title="Volver al inicio"
           onPress={handleGoHome}
-          variant={isGuest || user ? "outline" : "primary"}
+          variant="outline"
         />
       </View>
     </ScrollView>

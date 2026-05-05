@@ -38,8 +38,11 @@ const ROUTE_OFFSETS: Record<string, number> = {
   "Nombre de Dios": 45,
   "Vicente Guerrero": 75,
   "Sombrerete": 135,
+  "San José de Fénix": 150,
+  "Sain Alto": 165,
   "Río Florido": 180,
   "Fresnillo": 240,
+  "Calera": 265,
   "Zacatecas": 285,
   "Aguascalientes": 405,
   "San Juan de los Lagos": 480,
@@ -94,7 +97,6 @@ const ROUTE_IMAGES: Record<string, string> = {
   "Default": "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&q=80&w=400"
 };
 
-// --- NUEVO TIPO PARA VIAJE DE 15 DÍAS ---
 type TripType = "sencillo" | "redondo" | "15_dias";
 
 export default function HomeScreen() {
@@ -107,7 +109,6 @@ export default function HomeScreen() {
   const [destination, setDestination] = useState("Guadalajara");
   const [isSearching, setIsSearching] = useState(false);
   
-  // --- REEMPLAZAMOS EL SWITCH POR EL SELECTOR DE 3 OPCIONES ---
   const [tripType, setTripType] = useState<TripType>("sencillo");
   const isRoundTrip = tripType === "redondo";
   const is15Days = tripType === "15_dias";
@@ -163,7 +164,6 @@ export default function HomeScreen() {
       const formattedTrips = validTrips.map(t => {
         const segmentData = calculateSegmentData(t.departure_time, t.price, origin, destination);
         
-        // --- AQUÍ APLICAMOS LA LÓGICA DE PRECIOS SEGÚN EL TIPO DE VIAJE ---
         let finalPrice = segmentData.price;
         if (is15Days && t.price_15_days) {
           finalPrice = Number(t.price_15_days);
@@ -197,7 +197,7 @@ export default function HomeScreen() {
           destination, 
           date: formattedSearchDate, 
           isRoundTrip: isRoundTrip ? "true" : "false",
-          is15Days: is15Days ? "true" : "false", // --- PASAMOS LA BANDERA DE 15 DÍAS ---
+          is15Days: is15Days ? "true" : "false",
           returnDate: isRoundTrip ? formattedReturnDate : undefined,
           results: JSON.stringify(formattedTrips) 
         },
@@ -306,7 +306,6 @@ export default function HomeScreen() {
 
             <View style={[styles.divider, { backgroundColor: colors.muted }]} />
 
-            {/* --- REEMPLAZO DEL SWITCH POR BOTONES DE TIPO DE VIAJE --- */}
             <View style={[styles.tripTypeContainer, { backgroundColor: colors.muted }]}>
               <TouchableOpacity style={[styles.tripTypeBtn, tripType === "sencillo" && { backgroundColor: colors.card, shadowColor: "#000", elevation: 2 }]} onPress={() => setTripType("sencillo")}>
                 <Text style={[styles.tripTypeText, { color: tripType === "sencillo" ? colors.foreground : colors.mutedForeground }]}>Sencillo</Text>
@@ -319,7 +318,6 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* --- FECHA DE IDA --- */}
             <TouchableOpacity style={styles.dateRow} activeOpacity={0.7} onPress={() => setDatePickerType("departure")}>
               <View style={[styles.iconContainer, { backgroundColor: colors.muted }]}>
                 <Feather name="calendar" size={18} color={colors.mutedForeground} />
@@ -341,7 +339,6 @@ export default function HomeScreen() {
               </View>
             </TouchableOpacity>
 
-            {/* --- AVISO DE 15 DÍAS --- */}
             {is15Days && (
               <View style={[styles.info15Days, { backgroundColor: "#f3e5f5" }]}>
                 <Feather name="info" size={16} color="#9b59b6" />
@@ -351,7 +348,6 @@ export default function HomeScreen() {
               </View>
             )}
 
-            {/* --- FECHA DE REGRESO --- */}
             {isRoundTrip && (
               <TouchableOpacity style={styles.dateRow} activeOpacity={0.7} onPress={() => setDatePickerType("return")}>
                 <View style={[styles.iconContainer, { backgroundColor: colors.secondary }]}>
