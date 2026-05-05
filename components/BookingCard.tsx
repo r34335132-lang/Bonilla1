@@ -7,7 +7,8 @@ import { Booking } from "@/contexts/BookingContext";
 interface BookingCardProps {
   booking: Booking;
   onCancel?: (id: string) => void;
-  onPay?: (booking: Booking) => void; // <-- NUEVO: Agregamos la función onPay
+  onPay?: (booking: Booking) => void; 
+  onPrint?: (booking: Booking) => void; 
   isAdmin?: boolean;
 }
 
@@ -17,7 +18,7 @@ const STATUS_CONFIG = {
   cancelled: { label: "Cancelado", color: "#EF4444" },
 };
 
-export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardProps) {
+export function BookingCard({ booking, onCancel, onPay, onPrint, isAdmin }: BookingCardProps) {
   const colors = useColors();
   const statusInfo = STATUS_CONFIG[booking.status] || STATUS_CONFIG.pending;
   
@@ -81,13 +82,13 @@ export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardPr
         <DetailRow
           icon="grid"
           label="Asientos"
-          value={booking.seats.join(", ")}
+          value={booking.seats && booking.seats.length > 0 ? booking.seats.join(", ") : "Abierto / Sin asignar"}
           colors={colors}
         />
         <DetailRow
           icon="credit-card"
           label="Pago"
-          value={booking.paymentMethod === "card" ? "Mercado Pago" : "En Taquilla"}
+          value={booking.paymentMethod === "card" ? "Tarjeta" : "En Taquilla"} // <-- CORREGIDO A "Tarjeta"
           colors={colors}
         />
         {isAdmin && (
@@ -132,7 +133,6 @@ export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardPr
         </View>
       )}
 
-      {/* --- AQUÍ ESTÁ EL FOOTER MODIFICADO CON EL BOTÓN --- */}
       <View style={styles.footer}>
         <View style={{ flex: 1 }}>
           <Text style={[styles.footerLabel, { color: colors.mutedForeground }]}>
@@ -144,7 +144,6 @@ export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardPr
         </View>
         
         <View style={{ flexDirection: "row", gap: 8 }}>
-          {/* Botón Cancelar */}
           {onCancel && booking.status !== "cancelled" && (
             <TouchableOpacity
               style={[
@@ -162,13 +161,12 @@ export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardPr
             </TouchableOpacity>
           )}
 
-          {/* Botón Pagar Ahora (Solo sale si es status pending y existe la función onPay) */}
           {onPay && booking.status === "pending" && (
             <TouchableOpacity
               style={[
                 styles.cancelBtn,
                 {
-                  backgroundColor: colors.primary, // Botón relleno
+                  backgroundColor: colors.primary, 
                   borderColor: colors.primary,
                   borderRadius: colors.radius / 2,
                 },
@@ -177,6 +175,28 @@ export function BookingCard({ booking, onCancel, onPay, isAdmin }: BookingCardPr
             >
               <Text style={[styles.cancelText, { color: "#fff" }]}>
                 Pagar Ahora
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {onPrint && booking.status === "confirmed" && (
+            <TouchableOpacity
+              style={[
+                styles.cancelBtn,
+                {
+                  backgroundColor: colors.secondary,
+                  borderColor: colors.secondary,
+                  borderRadius: colors.radius / 2,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6
+                },
+              ]}
+              onPress={() => onPrint(booking)}
+            >
+              <Feather name="download" size={14} color={colors.primary} />
+              <Text style={[styles.cancelText, { color: colors.primary }]}>
+                Boleto
               </Text>
             </TouchableOpacity>
           )}

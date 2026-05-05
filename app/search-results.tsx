@@ -22,8 +22,11 @@ const ROUTE_OFFSETS: Record<string, number> = {
   "Nombre de Dios": 45,
   "Vicente Guerrero": 75,
   "Sombrerete": 135,
+  "San José de Fénix": 150,
+  "Sain Alto": 165,
   "Río Florido": 180,
   "Fresnillo": 240,
+  "Calera": 265,
   "Zacatecas": 285,
   "Aguascalientes": 405,
   "San Juan de los Lagos": 480,
@@ -218,7 +221,7 @@ export default function SearchResultsScreen() {
     };
 
     fetchAndCalculateTrips();
-  }, [origin, destination, date, isRoundTrip, is15Days]); // <-- Agregamos is15Days aquí
+  }, [origin, destination, date, isRoundTrip, is15Days]);
 
   const handleSelect = (trip: Trip) => {
     if (trip.availableSeats <= 0) return; 

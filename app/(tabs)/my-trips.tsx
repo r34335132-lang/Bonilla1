@@ -2,7 +2,9 @@ import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser"; 
 import * as Linking from "expo-linking"; 
-import React, { useState } from "react";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import React, { useState, useMemo } from "react";
 import {
   Alert,
   ActivityIndicator,
@@ -31,6 +33,13 @@ export default function MyTripsScreen() {
 
   const [guestEmail, setGuestEmail] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+
+  // --- ORDENAMOS LOS VIAJES DEL MÁS RECIENTE AL MÁS ANTIGUO ---
+  const sortedBookings = useMemo(() => {
+    return [...bookings].sort((a, b) => {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [bookings]);
 
   const handleGuestSearch = async () => {
     if (!guestEmail.trim()) {
@@ -66,18 +75,16 @@ export default function MyTripsScreen() {
     try {
       Alert.alert("Conectando", "Generando tu link de pago seguro con Clip...");
       
-      // Verificamos si la reserva es de 15 días o redonda
       const is15Days = (booking as any).is_15_days;
       const isRoundTrip = (booking as any).is_round_trip;
       const tipoViaje = is15Days ? '15 Días' : isRoundTrip ? 'Redondo' : 'Sencillo';
 
-      // Usamos el totalPrice guardado para asegurar que cobramos la tarifa correcta
-      const unitPrice = booking.totalPrice / booking.seats.length;
+      const unitPrice = booking.totalPrice / (booking.seats.length || 1);
 
       const { data, error } = await supabase.functions.invoke('create-clip-payment', {
         body: {
           title: `Viaje ${tipoViaje}: ${booking.trip.origin} a ${booking.trip.destination}`,
-          quantity: booking.seats.length,
+          quantity: booking.seats.length || 1,
           price: unitPrice, 
           email: booking.passengerEmail,
           bookingId: booking.id 
@@ -108,31 +115,120 @@ export default function MyTripsScreen() {
     }
   };
 
+  const handlePrintBoleto = async (booking: Booking) => {
+    try {
+      const is15Days = (booking as any).is_15_days;
+      const isRoundTrip = (booking as any).is_round_trip;
+      const tipoViaje = is15Days ? 'Paquete 15 Días' : isRoundTrip ? 'Viaje Redondo' : 'Viaje Sencillo';
+      const asientosStr = booking.seats && booking.seats.length > 0 ? booking.seats.join(', ') : 'Asignado al abordar';
+      
+      const logoUrl = "https://gisyiiljfplywcfhxxem.supabase.co/storage/v1/object/public/fls/WhatsApp%20Image%202026-05-04%20at%205.53.38%20PM.jpeg"; 
+
+      const html = `
+        <html><head><style>
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: auto; }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
+          .header img { max-width: 280px; margin-bottom: 10px; }
+          .header h2 { margin: 5px 0 0 0; color: #555; font-size: 18px; letter-spacing: 2px; }
+          .content { display: flex; justify-content: space-between; }
+          .info { width: 65%; }
+          .qr-section { width: 30%; text-align: center; }
+          .qr-section img { width: 150px; height: 150px; margin-bottom: 10px; }
+          .row { margin-bottom: 15px; }
+          .label { font-size: 12px; color: #777; text-transform: uppercase; font-weight: bold; display: block; margin-bottom: 2px; }
+          .value { font-size: 18px; font-weight: bold; color: #000; }
+          .highlight { background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #b91c1c; }
+          .terms { margin-top: 40px; font-size: 11px; color: #555; border-top: 1px solid #ccc; padding-top: 20px; text-align: justify; line-height: 1.5; }
+          .terms h4 { margin-top: 0; color: #000; font-size: 14px; }
+        </style></head><body>
+          <div class="header">
+            <img src="${logoUrl}" alt="Bonilla Tours" />
+            <h2>BOLETO REGULAR</h2>
+          </div>
+          <div class="content">
+            <div class="info">
+              <div class="row">
+                <span class="label">Pasajero/a</span>
+                <span class="value">${booking.passengerName}</span>
+              </div>
+              <div class="row highlight">
+                <span class="label">Destino</span>
+                <span class="value" style="font-size: 24px;">${booking.trip.destination}</span>
+              </div>
+              <div class="row">
+                <span class="label">Fecha y hora de viaje</span>
+                <span class="value">${booking.trip.date} - ${booking.trip.departureTime}</span>
+              </div>
+              <div class="row">
+                <span class="label">Viaje</span>
+                <span class="value">Destino: ${booking.trip.destination} | ${tipoViaje}</span>
+              </div>
+              <div class="row" style="display: flex; gap: 40px;">
+                <div>
+                  <span class="label">Asiento(s)</span>
+                  <span class="value">${asientosStr}</span>
+                </div>
+                <div>
+                  <span class="label">Total Pagado</span>
+                  <span class="value">$ ${Number(booking.totalPrice).toFixed(2)} MXN</span>
+                </div>
+              </div>
+            </div>
+            <div class="qr-section">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${booking.id}" alt="QR Code" />
+              <div class="label">Folio de Reserva</div>
+              <div class="value" style="font-size: 16px;">${booking.id}</div>
+              <div style="margin-top: 20px; font-size: 12px; color: #666;">
+                <strong>Emitido:</strong><br/>${new Date(booking.createdAt).toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div class="terms">
+            <h4>TÉRMINOS Y CONDICIONES</h4>
+            <p>Deberá presentarse por lo menos 20 minutos antes del horario seleccionado en el punto de encuentro establecido en su reservación o itinerario.</p>
+            <p>Para abordar, deberá presentar el código QR de su reservación o el folio impreso en este boleto.</p>
+            <p>Para garantizar que los usuarios lleguen a tiempo a su destino, únicamente otorgamos 5 minutos de tolerancia en espera. Una vez transcurrido ese tiempo, el conductor dará comienzo al viaje. Situaciones excepcionales se valorarán y gestionarán de mutuo acuerdo entre empresa y usuarios.</p>
+            <p>Cabe tener en cuenta que algún punto de encuentro o descenso puede cambiar a causa de situaciones ajenas a la empresa, tales como obras, bloqueos, accidentes etc. En tal caso, se les informará a los usuarios con antelación si ello fuera posible. De otro modo, se acordará con los usuarios una opción conveniente.</p>
+            <h4 style="margin-top: 15px;">Cancelaciones</h4>
+            <p>Las cancelaciones tienen un costo del 10% (trámite exclusivo en oficina) y aplican siempre y cuando se soliciten con al menos 1 hora de anticipación a la salida.</p>
+          </div>
+        </body></html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "No se pudo generar el documento PDF.");
+    }
+  };
+
+  // --- VISTA PARA USUARIOS REGISTRADOS ---
   if (user) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={[styles.header, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20), backgroundColor: colors.card }]}>
-          <Text style={[styles.screenTitle, { color: colors.foreground }]}>Mis Viajes</Text>
+          <Text style={[styles.screenTitle, { color: colors.foreground }]}>Historial de Viajes</Text>
         </View>
 
         {isLoading ? (
           <View style={styles.centerBox}>
             <ActivityIndicator size="large" color={colors.primary} />
           </View>
-        ) : bookings.length === 0 ? (
+        ) : sortedBookings.length === 0 ? (
           <View style={styles.centerBox}>
             <View style={[styles.iconCircle, { backgroundColor: colors.muted }]}>
-              <Feather name="map" size={32} color={colors.mutedForeground} />
+              <Feather name="folder" size={32} color={colors.mutedForeground} />
             </View>
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Sin reservas activas</Text>
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>Aún no tienes viajes programados.</Text>
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Sin historial</Text>
+            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>Aún no tienes viajes registrados.</Text>
             <AppButton title="Buscar boletos" onPress={() => router.navigate("/(tabs)")} fullWidth={false} />
           </View>
         ) : (
           <FlatList
-            data={bookings}
+            data={sortedBookings}
             keyExtractor={(b) => b.id}
-            renderItem={({ item }) => <BookingCard booking={item} onCancel={handleCancel} onPay={handlePay} />} 
+            renderItem={({ item }) => <BookingCard booking={item} onCancel={handleCancel} onPay={handlePay} onPrint={handlePrintBoleto} />} 
             contentContainerStyle={{ paddingTop: 20, paddingBottom: insets.bottom + 80 }}
             showsVerticalScrollIndicator={false}
           />
@@ -141,6 +237,7 @@ export default function MyTripsScreen() {
     );
   }
 
+  // --- VISTA PARA INVITADOS ---
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
@@ -148,19 +245,19 @@ export default function MyTripsScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <View style={[styles.header, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20), backgroundColor: colors.card }]}>
-        <Text style={[styles.screenTitle, { color: colors.foreground }]}>Mis Viajes</Text>
+        <Text style={[styles.screenTitle, { color: colors.foreground }]}>Historial de Viajes</Text>
       </View>
 
       <View style={styles.guestContainer}>
         <View style={[styles.infoBox, { backgroundColor: colors.secondary, borderRadius: 16 }]}>
           <Feather name="info" size={20} color={colors.primary} />
           <Text style={[styles.infoText, { color: colors.primary }]}>
-            Si reservaste como invitado, ingresa tu correo para ver tus boletos.
+            Ingresa tu correo para ver todos tus boletos.
           </Text>
         </View>
 
         <View style={styles.guestForm}>
-          <Text style={[styles.label, { color: colors.foreground }]}>Correo electrónico de reserva</Text>
+          <Text style={[styles.label, { color: colors.foreground }]}>Correo electrónico</Text>
           <TextInput
             style={[styles.input, { borderColor: colors.border, borderRadius: 16, backgroundColor: colors.card, color: colors.foreground }]}
             value={guestEmail}
@@ -170,23 +267,23 @@ export default function MyTripsScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
           />
-          <AppButton title="Buscar mis boletos" onPress={handleGuestSearch} loading={isLoading} />
+          <AppButton title="Buscar mi historial" onPress={handleGuestSearch} loading={isLoading} />
         </View>
 
         {hasSearched && !isLoading && (
           <View style={styles.results}>
-            {bookings.length === 0 ? (
+            {sortedBookings.length === 0 ? (
               <View style={styles.noResults}>
                 <Feather name="search" size={32} color={colors.mutedForeground} />
                 <Text style={[styles.noResultsText, { color: colors.mutedForeground }]}>
-                  No encontramos reservaciones activas para ese correo.
+                  No encontramos reservaciones para ese correo.
                 </Text>
               </View>
             ) : (
               <>
-                <Text style={[styles.resultsTitle, { color: colors.foreground }]}>Resultados</Text>
-                {bookings.map((b) => (
-                  <BookingCard key={b.id} booking={b} onCancel={handleCancel} onPay={handlePay} /> 
+                <Text style={[styles.resultsTitle, { color: colors.foreground }]}>Tus Boletos</Text>
+                {sortedBookings.map((b) => (
+                  <BookingCard key={b.id} booking={b} onCancel={handleCancel} onPay={handlePay} onPrint={handlePrintBoleto} /> 
                 ))}
               </>
             )}

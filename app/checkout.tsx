@@ -26,11 +26,10 @@ export default function CheckoutScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // AHORA RECIBIMOS TAMBIÉN is15Days DESDE EL BUSCADOR
   const { isRoundTrip, returnDate, is15Days } = useLocalSearchParams<{
     isRoundTrip?: string;
     returnDate?: string;
-    is15Days?: string; // <-- NUEVO
+    is15Days?: string;
   }>();
 
   const { user, isGuest, guestInfo, setGuestInfo } = useAuth();
@@ -57,15 +56,12 @@ export default function CheckoutScreen() {
     return null;
   }
 
-  // --- LÓGICA DE PRECIOS DINÁMICOS ---
-  // Iniciamos con el precio base
+  // --- LÓGICA DE PRECIOS ---
   let unitPrice = pendingTrip.price;
   
-  // Si eligió 15 días, cambiamos el precio por el precio especial de 15 días (si existe, si no, usa el base)
   if (is15Days === "true" && pendingTrip.price_15_days) {
     unitPrice = pendingTrip.price_15_days;
   }
-  // (Aquí puedes agregar más adelante la lógica del precio redondo si la ocupas)
 
   const totalPrice = pendingSeats.length * unitPrice;
 
@@ -88,6 +84,7 @@ export default function CheckoutScreen() {
     }
 
     try {
+      // 1. Confirmamos la reserva base
       const booking = await confirmBooking({
         trip: pendingTrip, 
         seats: pendingSeats,
@@ -98,20 +95,20 @@ export default function CheckoutScreen() {
         status: "pending", 
         userId: user?.id ?? null,
         isGuest: !user,
-        totalPrice, // Usamos el total ya modificado con el precio de 15 días
+        totalPrice,
       });
 
-      // Le decimos a Supabase qué tipo de viaje fue
-      if (isRoundTrip === "true") {
-        await supabase.from('bookings').update({ is_round_trip: true }).eq('booking_ref', booking.id);
-      } else if (is15Days === "true") {
-        await supabase.from('bookings').update({ is_15_days: true }).eq('booking_ref', booking.id); // <-- GUARDAMOS 15 DIAS
-      }
+      // 2. Sincronizamos los metadatos de tipo de viaje en Supabase
+      await supabase.from('bookings').update({ 
+        is_round_trip: isRoundTrip === "true",
+        is_15_days: is15Days === "true" 
+      }).eq('id', booking.id);
 
+      // 3. Procesamiento de Pago con Clip
       if (paymentMethod === "card") {
         const { data, error } = await supabase.functions.invoke('create-clip-payment', {
           body: {
-            title: `Viaje ${is15Days === 'true' ? '15 Días' : 'Sencillo'}: ${pendingTrip.origin} a ${pendingTrip.destination}`,
+            title: `Viaje ${is15Days === 'true' ? 'Paquete 15 Días' : 'Sencillo'}: ${pendingTrip.origin} a ${pendingTrip.destination}`,
             quantity: pendingSeats.length,
             price: unitPrice,
             email: email,
@@ -121,10 +118,10 @@ export default function CheckoutScreen() {
 
         if (error) throw new Error(`Conexión fallida: ${error.message}`);
         if (data && data.ok === false) throw new Error(`Clip rechazó el pago: ${data.error}`);
-        if (!data?.payment_url) throw new Error("No se recibió el link seguro de pago de Clip.");
-
+        
         await WebBrowser.openBrowserAsync(data.payment_url);
         
+        // Verificamos si se confirmó tras cerrar el navegador
         const { data: checkBooking } = await supabase
           .from('bookings')
           .select('status')
@@ -132,20 +129,24 @@ export default function CheckoutScreen() {
           .single();
 
         if (checkBooking?.status !== "confirmed") {
-          Alert.alert("Pago no completado", "Cerramos la ventana de pago. Tu reserva se guardó como pendiente de pago.");
+          Alert.alert("Pago pendiente", "No pudimos confirmar tu pago automáticamente. Si ya pagaste, tu estado se actualizará pronto en 'Mis Viajes'.");
           router.navigate("/(tabs)/my-trips"); 
           return; 
         }
       }
       
+      // 4. Éxito: Pasamos los datos completos (incluyendo la bandera is15Days para el boleto)
       router.replace({
         pathname: "/booking-success",
-        params: { bookingId: booking.id, bookingData: JSON.stringify(booking) },
+        params: { 
+          bookingId: booking.id, 
+          bookingData: JSON.stringify({ ...booking, is15Days: is15Days === "true" }) 
+        },
       });
       
     } catch (err: any) {
       console.error(err);
-      Alert.alert("Detalle del Error", err.message || "Ocurrió un error inesperado.");
+      Alert.alert("Error en la reserva", err.message || "Ocurrió un error inesperado.");
     } finally {
       setLoading(false);
     }
@@ -171,7 +172,7 @@ export default function CheckoutScreen() {
 
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 100) }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <Section title="Resumen de tu viaje" icon="map" colors={colors}>
-          <View style={[styles.tripSummary, { borderColor: colors.border }]}>
+          <View style={[styles.tripSummary, { borderColor: is15Days === "true" ? "#9b59b6" : colors.border }]}>
             <View style={styles.ticketHeader}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.ticketCity, { color: colors.foreground }]}>{pendingTrip.origin}</Text>
@@ -194,18 +195,22 @@ export default function CheckoutScreen() {
                 <Text style={[styles.ticketValue, { color: colors.foreground }]}>{pendingTrip.date}</Text>
               </View>
               
-              {/* MOSTRAMOS SI ES PAQUETE DE 15 DÍAS O REDONDO */}
               {is15Days === "true" ? (
                 <View style={styles.ticketDetailCol}>
                   <Text style={[styles.ticketLabel, { color: "#9b59b6" }]}>Tipo de Viaje</Text>
                   <Text style={[styles.ticketValue, { color: "#9b59b6" }]}>Paquete 15 Días</Text>
                 </View>
-              ) : isRoundTrip === "true" && returnDate ? (
+              ) : isRoundTrip === "true" ? (
                 <View style={styles.ticketDetailCol}>
-                  <Text style={[styles.ticketLabel, { color: colors.primary }]}>Día de regreso</Text>
+                  <Text style={[styles.ticketLabel, { color: colors.primary }]}>Regreso</Text>
                   <Text style={[styles.ticketValue, { color: colors.primary }]}>{returnDate}</Text>
                 </View>
-              ) : null}
+              ) : (
+                <View style={styles.ticketDetailCol}>
+                  <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Tipo</Text>
+                  <Text style={[styles.ticketValue, { color: colors.foreground }]}>Sencillo</Text>
+                </View>
+              )}
 
               <View style={[styles.ticketDetailCol, { alignItems: "flex-end" }]}>
                 <Text style={[styles.ticketLabel, { color: colors.mutedForeground }]}>Asientos</Text>
@@ -220,8 +225,8 @@ export default function CheckoutScreen() {
             <View>
               <Text style={[styles.priceLabel, { color: colors.primary }]}>Total a pagar</Text>
               {is15Days === "true" && (
-                <Text style={{fontSize: 12, color: "#9b59b6", marginTop: 2, fontWeight: '600'}}>
-                  (Tarifa Especial 15 Días)
+                <Text style={{fontSize: 12, color: "#9b59b6", marginTop: 2, fontWeight: '700'}}>
+                  Tarifa Especial Aplicada
                 </Text>
               )}
             </View>
@@ -232,17 +237,10 @@ export default function CheckoutScreen() {
         </Section>
 
         <Section title="Datos del pasajero" icon="user" colors={colors}>
-          {user ? (
-            <View style={[styles.autofillBanner, { backgroundColor: colors.secondary, borderRadius: 16 }]}>
-              <Feather name="check-circle" size={16} color={colors.primary} />
-              <Text style={[styles.autofillText, { color: colors.primary }]}>Datos pre-llenados desde tu cuenta</Text>
-            </View>
-          ) : null}
-
           <View style={{ gap: 16 }}>
             <FormField label="Nombre completo" value={name} onChangeText={setName} error={errors.name} placeholder="Ej. Juan Pérez" icon="user" colors={colors} />
             <FormField label="Correo electrónico" value={email} onChangeText={setEmail} error={errors.email} placeholder="tu@correo.com" keyboardType="email-address" autoCapitalize="none" icon="mail" colors={colors} />
-            <FormField label="Teléfono móvil" value={phone} onChangeText={setPhone} error={errors.phone} placeholder="A 10 dígitos" keyboardType="phone-pad" icon="phone" colors={colors} />
+            <FormField label="Teléfono móvil" value={phone} onChangeText={setPhone} error={errors.phone} placeholder="10 dígitos" keyboardType="phone-pad" icon="phone" colors={colors} />
           </View>
         </Section>
 
@@ -269,7 +267,7 @@ export default function CheckoutScreen() {
                     {method === "card" ? "Tarjeta (Clip)" : "Pago en Taquilla"}
                   </Text>
                   <Text style={[styles.paymentSub, { color: colors.mutedForeground }]}>
-                    {method === "card" ? "Procesamiento seguro con Clip" : "Paga al abordar o en sucursal"}
+                    {method === "card" ? "Portal seguro de Clip" : "Paga antes de abordar"}
                   </Text>
                 </View>
                 <View style={[styles.radio, { borderColor: paymentMethod === method ? colors.primary : colors.border }]}>
@@ -279,31 +277,25 @@ export default function CheckoutScreen() {
             ))}
           </View>
 
-          {paymentMethod === "card" ? (
-            <View style={[styles.cardNotice, { backgroundColor: colors.muted }]}>
-              <Feather name="lock" size={14} color={colors.mutedForeground} />
-              <Text style={[styles.cardNoticeText, { color: colors.mutedForeground }]}>
-                Serás redirigido al portal oficial de Clip para completar tu compra de forma 100% segura.
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.cardNotice, { backgroundColor: "#fff3cd", borderColor: "#ffeeba", borderWidth: 1 }]}>
-              <Feather name="clock" size={14} color="#856404" />
-              <Text style={[styles.cardNoticeText, { color: "#856404" }]}>
-                Importante: Tu reserva se guardará por 2 horas. Si no realizas el pago en taquilla en este tiempo, se cancelará automáticamente.
-              </Text>
-            </View>
-          )}
+          <View style={[styles.cardNotice, { backgroundColor: paymentMethod === 'card' ? colors.muted : "#fff3cd" }]}>
+            <Feather name={paymentMethod === 'card' ? "lock" : "alert-circle"} size={14} color={paymentMethod === 'card' ? colors.mutedForeground : "#856404"} />
+            <Text style={[styles.cardNoticeText, { color: paymentMethod === 'card' ? colors.mutedForeground : "#856404" }]}>
+              {paymentMethod === 'card' 
+                ? "Tu transacción es procesada de forma segura por Clip." 
+                : "Importante: Tienes 2 horas para pagar en taquilla o tu reserva expirará."}
+            </Text>
+          </View>
         </Section>
 
         <View style={{ marginTop: 10 }}>
-          <AppButton title="Confirmar Reserva" onPress={handleConfirm} loading={loading} />
+          <AppButton title="Finalizar Reserva" onPress={handleConfirm} loading={loading} />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
+// Sub-componentes auxiliares
 function Section({ title, icon, children, colors }: { title: string; icon: any; children: React.ReactNode; colors: any; }) {
   return (
     <View style={[styles.section, { backgroundColor: colors.card, shadowColor: "#000" }]}>
@@ -324,7 +316,16 @@ function FormField({ label, value, onChangeText, error, placeholder, keyboardTyp
       <Text style={[styles.fieldLabel, { color: colors.foreground }]}>{label}</Text>
       <View style={[styles.inputContainer, { backgroundColor: colors.muted, borderColor: error ? colors.destructive : "transparent" }]}>
         <Feather name={icon} size={18} color={colors.mutedForeground} style={styles.inputIcon} />
-        <TextInput style={[styles.input, { color: colors.foreground }]} value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.mutedForeground} keyboardType={keyboardType} autoCapitalize={autoCapitalize ?? "words"} autoCorrect={false} />
+        <TextInput 
+            style={[styles.input, { color: colors.foreground }]} 
+            value={value} 
+            onChangeText={onChangeText} 
+            placeholder={placeholder} 
+            placeholderTextColor={colors.mutedForeground} 
+            keyboardType={keyboardType} 
+            autoCapitalize={autoCapitalize ?? "words"} 
+            autoCorrect={false} 
+        />
       </View>
       {error ? <Text style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
     </View>
@@ -351,13 +352,11 @@ const styles = StyleSheet.create({
   ticketDetails: { flexDirection: "row", justifyContent: "space-between" },
   ticketDetailCol: { flex: 1 },
   ticketLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
-  ticketValue: { fontSize: 15, fontWeight: "800" },
+  ticketValue: { fontSize: 14, fontWeight: "800" },
   priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 18, borderRadius: 16 },
   priceLabel: { fontSize: 14, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
   priceValue: { fontSize: 24, fontWeight: "800", letterSpacing: -0.5 },
   priceCurrency: { fontSize: 14, fontWeight: "700" },
-  autofillBanner: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, marginBottom: 20 },
-  autofillText: { fontSize: 13, fontWeight: "700", flex: 1 },
   fieldLabel: { fontSize: 13, fontWeight: "700", marginBottom: 8, marginLeft: 4, letterSpacing: 0.3 },
   inputContainer: { flexDirection: "row", alignItems: "center", borderWidth: 1.5, borderRadius: 16, paddingHorizontal: 16, height: 56 },
   inputIcon: { marginRight: 12 },

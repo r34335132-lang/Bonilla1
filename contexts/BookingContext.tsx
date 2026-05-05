@@ -17,7 +17,7 @@ export interface Trip {
   arrivalTime: string;
   duration: string;
   price: number;
-  price_15_days?: number; // Añadimos el precio de 15 días aquí por si se necesita leer después
+  price_15_days?: number; 
   availableSeats: number;
   totalSeats: number;
   busType: string;
@@ -38,7 +38,7 @@ export interface Booking {
   userId: string | null;
   isGuest: boolean;
   totalPrice: number;
-  is15Days?: boolean; // <-- NUEVO: Identificador para el paquete de 15 días
+  is15Days?: boolean; 
 }
 
 interface BookingContextValue {
@@ -73,85 +73,100 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
 
   const fetchUserBookings = useCallback(async (userId: string) => {
     setIsLoading(true);
+    
+    const userEmail = user?.email || "";
+    const query = userEmail 
+      ? `user_id.eq.${userId},passenger_email.ilike.${userEmail}`
+      : `user_id.eq.${userId}`;
+
     const { data, error } = await supabase
       .from("bookings")
-      .select(`*, trip:trips(*)`)
-      .eq("user_id", userId)
+      // --- AQUÍ ESTÁ LA MAGIA: LE DECIMOS EXACTAMENTE QUÉ LLAVE USAR ---
+      .select(`*, trip:trips!bookings_trip_id_fkey(*)`) 
+      .or(query)
       .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("🔴 ERROR SUPABASE (Usuario):", error.message);
+    }
 
     if (!error && data) {
       const formattedBookings: Booking[] = data.map((b) => ({
         id: b.booking_ref,
         trip: {
-          id: b.trip.id,
-          origin: b.origin || b.trip.origin, 
-          destination: b.destination || b.trip.destination,
-          date: b.trip.date,
-          departureTime: b.trip.departure_time,
-          arrivalTime: b.trip.arrival_time,
-          duration: b.trip.duration,
-          price: b.trip.price,
-          availableSeats: b.trip.available_seats,
-          totalSeats: b.trip.total_seats,
-          busType: b.trip.bus_type,
-          amenities: b.trip.amenities,
-          occupiedSeats: b.trip.occupied_seats,
+          id: b.trip?.id || b.trip_id || "N/A",
+          origin: b.origin || b.trip?.origin || "Origen Desconocido", 
+          destination: b.destination || b.trip?.destination || "Destino Desconocido",
+          date: b.trip?.date || "Fecha Pasada",
+          departureTime: b.trip?.departure_time || "--:--",
+          arrivalTime: b.trip?.arrival_time || "--:--",
+          duration: b.trip?.duration || "--",
+          price: b.trip?.price || 0,
+          availableSeats: b.trip?.available_seats || 0,
+          totalSeats: b.trip?.total_seats || 40,
+          busType: b.trip?.bus_type || "Estándar",
+          amenities: b.trip?.amenities || [],
+          occupiedSeats: b.trip?.occupied_seats || [],
         },
-        seats: b.seats,
-        passengerName: b.passenger_name,
-        passengerEmail: b.passenger_email,
-        passengerPhone: b.passenger_phone,
-        paymentMethod: b.payment_method,
-        status: b.status,
+        seats: b.seats || [],
+        passengerName: b.passenger_name || "Pasajero",
+        passengerEmail: b.passenger_email || "",
+        passengerPhone: b.passenger_phone || "",
+        paymentMethod: b.payment_method || "cash",
+        status: b.status || "pending",
         createdAt: b.created_at,
         userId: b.user_id,
         isGuest: b.is_guest,
-        totalPrice: b.total_price,
-        is15Days: b.is_15_days, // <-- NUEVO: Leemos de Supabase
+        totalPrice: b.total_price || 0,
+        is15Days: b.is_15_days, 
       }));
       setBookings(formattedBookings);
     }
     setIsLoading(false);
-  }, []);
+  }, [user?.email]);
 
   const fetchGuestBookings = useCallback(async (email: string) => {
     setIsLoading(true);
     const { data, error } = await supabase
       .from("bookings")
-      .select(`*, trip:trips(*)`)
-      .eq("is_guest", true)
+      // --- AQUÍ TAMBIÉN CORREGIMOS EL SELECT ---
+      .select(`*, trip:trips!bookings_trip_id_fkey(*)`)
       .ilike("passenger_email", email)
       .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("🔴 ERROR SUPABASE (Invitado):", error.message);
+    }
 
     if (!error && data) {
       const formattedBookings: Booking[] = data.map((b) => ({
         id: b.booking_ref,
         trip: {
-          id: b.trip.id,
-          origin: b.origin || b.trip.origin,
-          destination: b.destination || b.trip.destination,
-          date: b.trip.date,
-          departureTime: b.trip.departure_time,
-          arrivalTime: b.trip.arrival_time,
-          duration: b.trip.duration,
-          price: b.trip.price,
-          availableSeats: b.trip.available_seats,
-          totalSeats: b.trip.total_seats,
-          busType: b.trip.bus_type,
-          amenities: b.trip.amenities,
-          occupiedSeats: b.trip.occupied_seats,
+          id: b.trip?.id || b.trip_id || "N/A",
+          origin: b.origin || b.trip?.origin || "Origen Desconocido",
+          destination: b.destination || b.trip?.destination || "Destino Desconocido",
+          date: b.trip?.date || "Fecha Pasada",
+          departureTime: b.trip?.departure_time || "--:--",
+          arrivalTime: b.trip?.arrival_time || "--:--",
+          duration: b.trip?.duration || "--",
+          price: b.trip?.price || 0,
+          availableSeats: b.trip?.available_seats || 0,
+          totalSeats: b.trip?.total_seats || 40,
+          busType: b.trip?.bus_type || "Estándar",
+          amenities: b.trip?.amenities || [],
+          occupiedSeats: b.trip?.occupied_seats || [],
         },
-        seats: b.seats,
-        passengerName: b.passenger_name,
-        passengerEmail: b.passenger_email,
-        passengerPhone: b.passenger_phone,
-        paymentMethod: b.payment_method,
-        status: b.status,
+        seats: b.seats || [],
+        passengerName: b.passenger_name || "Pasajero",
+        passengerEmail: b.passenger_email || "",
+        passengerPhone: b.passenger_phone || "",
+        paymentMethod: b.payment_method || "cash",
+        status: b.status || "pending",
         createdAt: b.created_at,
         userId: b.user_id,
         isGuest: b.is_guest,
-        totalPrice: b.total_price,
-        is15Days: b.is_15_days, // <-- NUEVO: Leemos de Supabase
+        totalPrice: b.total_price || 0,
+        is15Days: b.is_15_days, 
       }));
       setBookings(formattedBookings);
     }
@@ -180,12 +195,11 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
           total_price: bookingData.totalPrice,
           origin: bookingData.trip.origin,
           destination: bookingData.trip.destination,
-          is_15_days: bookingData.is15Days || false, // <-- NUEVO: Guardamos en Supabase
         });
 
       if (error) {
         setIsLoading(false);
-        console.error("Error Supabase:", error);
+        console.error("🔴 Error Guardando Reserva:", error.message);
         throw new Error(error.message);
       }
 
