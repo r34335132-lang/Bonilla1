@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -95,6 +94,9 @@ const ROUTE_IMAGES: Record<string, string> = {
   "Default": "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&q=80&w=400"
 };
 
+// --- NUEVO TIPO PARA VIAJE DE 15 DÍAS ---
+type TripType = "sencillo" | "redondo" | "15_dias";
+
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -105,8 +107,11 @@ export default function HomeScreen() {
   const [destination, setDestination] = useState("Guadalajara");
   const [isSearching, setIsSearching] = useState(false);
   
-  // --- NUEVOS ESTADOS PARA VIAJE REDONDO ---
-  const [isRoundTrip, setIsRoundTrip] = useState(false);
+  // --- REEMPLAZAMOS EL SWITCH POR EL SELECTOR DE 3 OPCIONES ---
+  const [tripType, setTripType] = useState<TripType>("sencillo");
+  const isRoundTrip = tripType === "redondo";
+  const is15Days = tripType === "15_dias";
+  
   const [dateObj, setDateObj] = useState(new Date());
   const [returnDateObj, setReturnDateObj] = useState(new Date());
   
@@ -142,7 +147,6 @@ export default function HomeScreen() {
         return;
       }
 
-      // 1. Buscamos los viajes de IDA
       const { data, error } = await supabase
         .from("trips")
         .select("*")
@@ -159,12 +163,14 @@ export default function HomeScreen() {
       const formattedTrips = validTrips.map(t => {
         const segmentData = calculateSegmentData(t.departure_time, t.price, origin, destination);
         
-        // Si es viaje redondo, intentamos buscar el precio especial del JSON si existe, si no, usa el normal
+        // --- AQUÍ APLICAMOS LA LÓGICA DE PRECIOS SEGÚN EL TIPO DE VIAJE ---
         let finalPrice = segmentData.price;
-        if (isRoundTrip && t.round_trip_prices && t.round_trip_prices[destination]) {
-           finalPrice = Number(t.round_trip_prices[destination]);
-        } else if (!isRoundTrip && t.prices && t.prices[destination]) {
-           finalPrice = Number(t.prices[destination]);
+        if (is15Days && t.price_15_days) {
+          finalPrice = Number(t.price_15_days);
+        } else if (isRoundTrip && t.round_trip_prices && t.round_trip_prices[destination]) {
+          finalPrice = Number(t.round_trip_prices[destination]);
+        } else if (!isRoundTrip && !is15Days && t.prices && t.prices[destination]) {
+          finalPrice = Number(t.prices[destination]);
         }
 
         return {
@@ -184,7 +190,6 @@ export default function HomeScreen() {
         };
       });
 
-      // Enviamos TODO a search-results
       router.push({
         pathname: "/search-results",
         params: { 
@@ -192,6 +197,7 @@ export default function HomeScreen() {
           destination, 
           date: formattedSearchDate, 
           isRoundTrip: isRoundTrip ? "true" : "false",
+          is15Days: is15Days ? "true" : "false", // --- PASAMOS LA BANDERA DE 15 DÍAS ---
           returnDate: isRoundTrip ? formattedReturnDate : undefined,
           results: JSON.stringify(formattedTrips) 
         },
@@ -217,7 +223,6 @@ export default function HomeScreen() {
     if (selectedDate) {
       if (datePickerType === "departure") {
         setDateObj(selectedDate);
-        // Si la ida ahora es DESPUÉS del regreso, empujamos el regreso hacia adelante
         if (isRoundTrip && selectedDate > returnDateObj) {
           setReturnDateObj(selectedDate);
         }
@@ -301,17 +306,17 @@ export default function HomeScreen() {
 
             <View style={[styles.divider, { backgroundColor: colors.muted }]} />
 
-            {/* --- SWITCH DE VIAJE REDONDO --- */}
-            <View style={styles.tripTypeRow}>
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginBottom: 0 }]}>
-                Añadir viaje de regreso
-              </Text>
-              <Switch
-                value={isRoundTrip}
-                onValueChange={setIsRoundTrip}
-                trackColor={{ false: colors.muted, true: colors.primary }}
-                thumbColor={Platform.OS === 'ios' ? "#fff" : isRoundTrip ? colors.primary : "#f4f3f4"}
-              />
+            {/* --- REEMPLAZO DEL SWITCH POR BOTONES DE TIPO DE VIAJE --- */}
+            <View style={[styles.tripTypeContainer, { backgroundColor: colors.muted }]}>
+              <TouchableOpacity style={[styles.tripTypeBtn, tripType === "sencillo" && { backgroundColor: colors.card, shadowColor: "#000", elevation: 2 }]} onPress={() => setTripType("sencillo")}>
+                <Text style={[styles.tripTypeText, { color: tripType === "sencillo" ? colors.foreground : colors.mutedForeground }]}>Sencillo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.tripTypeBtn, tripType === "redondo" && { backgroundColor: colors.card, shadowColor: "#000", elevation: 2 }]} onPress={() => setTripType("redondo")}>
+                <Text style={[styles.tripTypeText, { color: tripType === "redondo" ? colors.foreground : colors.mutedForeground }]}>Redondo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.tripTypeBtn, tripType === "15_dias" && { backgroundColor: colors.card, shadowColor: "#000", elevation: 2 }]} onPress={() => setTripType("15_dias")}>
+                <Text style={[styles.tripTypeText, { color: tripType === "15_dias" ? "#9b59b6" : colors.mutedForeground, fontWeight: tripType === "15_dias" ? "800" : "600" }]}>15 Días</Text>
+              </TouchableOpacity>
             </View>
 
             {/* --- FECHA DE IDA --- */}
@@ -321,7 +326,7 @@ export default function HomeScreen() {
               </View>
               <View>
                 <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>
-                  {isRoundTrip ? "Fecha de Ida" : "Fecha de Salida"}
+                  {isRoundTrip || is15Days ? "Fecha de Ida" : "Fecha de Salida"}
                 </Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Text style={[styles.dateText, { color: colors.foreground, textTransform: "capitalize" }]}>
@@ -335,6 +340,16 @@ export default function HomeScreen() {
                 </View>
               </View>
             </TouchableOpacity>
+
+            {/* --- AVISO DE 15 DÍAS --- */}
+            {is15Days && (
+              <View style={[styles.info15Days, { backgroundColor: "#f3e5f5" }]}>
+                <Feather name="info" size={16} color="#9b59b6" />
+                <Text style={{ fontSize: 12, color: "#8e44ad", flex: 1, fontWeight: "600" }}>
+                  Tu regreso está abierto por 15 días a partir de la salida con tarifa especial.
+                </Text>
+              </View>
+            )}
 
             {/* --- FECHA DE REGRESO --- */}
             {isRoundTrip && (
@@ -356,7 +371,7 @@ export default function HomeScreen() {
                 value={datePickerType === "departure" ? dateObj : returnDateObj}
                 mode="date"
                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                minimumDate={datePickerType === "departure" ? new Date() : dateObj} // El regreso no puede ser antes de la ida
+                minimumDate={datePickerType === "departure" ? new Date() : dateObj} 
                 onChange={onChangeDate}
               />
             )}
@@ -469,7 +484,9 @@ const styles = StyleSheet.create({
   swapBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 5 },
   divider: { height: 1, marginBottom: 20, marginTop: 4 },
   
-  tripTypeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  tripTypeContainer: { flexDirection: "row", padding: 4, borderRadius: 16, marginBottom: 16 },
+  tripTypeBtn: { flex: 1, paddingVertical: 12, alignItems: "center", borderRadius: 12 },
+  tripTypeText: { fontSize: 13, fontWeight: "700" },
   
   dateRow: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 20 },
   dateText: { fontSize: 17, fontWeight: "700" },
@@ -477,6 +494,8 @@ const styles = StyleSheet.create({
   todayBadgeText: { fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
   iosDateDoneBtn: { alignItems: 'center', marginBottom: 16, marginTop: -8 },
   iosDateDoneText: { fontWeight: '700', fontSize: 16 },
+  info15Days: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 12, marginBottom: 16 },
+
   section: { paddingHorizontal: 20, paddingTop: 36 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
   sectionTitle: { fontSize: 22, fontWeight: "800", letterSpacing: -0.5 },

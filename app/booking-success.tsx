@@ -148,6 +148,12 @@ export default function BookingSuccessScreen() {
                 label: "Método de Pago",
                 value: booking.paymentMethod === "card" ? "Tarjeta (Pagado/Pendiente)" : "Efectivo (Pago en Taquilla)",
               },
+              // --- NUEVA SECCIÓN PARA MOSTRAR SI ES DE 15 DÍAS ---
+              ...(booking.is15Days ? [{
+                icon: "clock",
+                label: "Tipo de Boleto",
+                value: "Paquete 15 Días (Regreso Abierto)",
+              }] : []),
             ].map(({ icon, label, value }) => (
               <View key={label} style={styles.detailRow}>
                 <View style={[styles.iconBox, { backgroundColor: colors.muted }]}>

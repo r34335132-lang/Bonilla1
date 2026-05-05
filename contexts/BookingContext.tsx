@@ -17,6 +17,7 @@ export interface Trip {
   arrivalTime: string;
   duration: string;
   price: number;
+  price_15_days?: number; // Añadimos el precio de 15 días aquí por si se necesita leer después
   availableSeats: number;
   totalSeats: number;
   busType: string;
@@ -37,6 +38,7 @@ export interface Booking {
   userId: string | null;
   isGuest: boolean;
   totalPrice: number;
+  is15Days?: boolean; // <-- NUEVO: Identificador para el paquete de 15 días
 }
 
 interface BookingContextValue {
@@ -82,7 +84,6 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
         id: b.booking_ref,
         trip: {
           id: b.trip.id,
-          // --- CORRECCIÓN: Leemos el origin y destination de la reserva, no del trip ---
           origin: b.origin || b.trip.origin, 
           destination: b.destination || b.trip.destination,
           date: b.trip.date,
@@ -106,6 +107,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
         userId: b.user_id,
         isGuest: b.is_guest,
         totalPrice: b.total_price,
+        is15Days: b.is_15_days, // <-- NUEVO: Leemos de Supabase
       }));
       setBookings(formattedBookings);
     }
@@ -126,7 +128,6 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
         id: b.booking_ref,
         trip: {
           id: b.trip.id,
-          // --- CORRECCIÓN: Leemos el origin y destination de la reserva, no del trip ---
           origin: b.origin || b.trip.origin,
           destination: b.destination || b.trip.destination,
           date: b.trip.date,
@@ -150,6 +151,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
         userId: b.user_id,
         isGuest: b.is_guest,
         totalPrice: b.total_price,
+        is15Days: b.is_15_days, // <-- NUEVO: Leemos de Supabase
       }));
       setBookings(formattedBookings);
     }
@@ -162,7 +164,6 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       
       const bookingRef = "BT-" + Math.floor(100000 + Math.random() * 900000).toString().slice(0, 6);
       
-      // 1. Insertamos usando el estatus que nos manda la pantalla (pending o confirmed)
       const { error } = await supabase
         .from("bookings")
         .insert({
@@ -177,9 +178,9 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
           status: bookingData.status, 
           is_guest: bookingData.isGuest,
           total_price: bookingData.totalPrice,
-          // --- CORRECCIÓN: Guardamos origin y destination en Supabase ---
           origin: bookingData.trip.origin,
           destination: bookingData.trip.destination,
+          is_15_days: bookingData.is15Days || false, // <-- NUEVO: Guardamos en Supabase
         });
 
       if (error) {
@@ -188,11 +189,6 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
         throw new Error(error.message);
       }
 
-      // ¡MAGIA DE TRAMOS APLICADA!
-      // Hemos eliminado la actualización de "occupied_seats" en la tabla "trips".
-      // Ahora los asientos se calcularán al vuelo leyendo las reservas.
-
-      // 2. Formateamos la reserva para guardarla en el estado local de la app
       const newBooking: Booking = {
         ...bookingData,
         id: bookingRef,

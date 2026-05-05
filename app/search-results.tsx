@@ -87,13 +87,14 @@ export default function SearchResultsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // --- MAGIA NUEVA: Recibimos si el viaje es redondo y la fecha de regreso ---
-  const { origin, destination, date, isRoundTrip, returnDate } = useLocalSearchParams<{
+  // --- MAGIA NUEVA: Recibimos también is15Days desde el Home ---
+  const { origin, destination, date, isRoundTrip, returnDate, is15Days } = useLocalSearchParams<{
     origin: string;
     destination: string;
     date: string;
     isRoundTrip?: string;
     returnDate?: string;
+    is15Days?: string; // <-- NUEVO
   }>();
   const { setPendingTrip, setPendingSeats } = useBooking();
 
@@ -149,12 +150,15 @@ export default function SearchResultsScreen() {
         const formattedTrips = validTrips.map(t => {
           const segmentData = calculateSegmentData(t, origin, destination);
           
-          // --- AQUÍ APLICAMOS LA TARIFA DE IDA Y VUELTA SI ESTÁ ACTIVA ---
           let finalPrice = segmentData.price;
           
-          // Verificamos si en el buscador activaron "isRoundTrip"
-          if (isRoundTrip === "true" && t.round_trip_prices && typeof t.round_trip_prices === 'object') {
-            // Buscamos el precio redondo en la base de datos
+          // --- AQUÍ APLICAMOS LA TARIFA DE 15 DÍAS O IDA Y VUELTA ---
+          if (is15Days === "true" && t.price_15_days) {
+            // Buscamos el precio especial de 15 días en la BD
+            const specialPrice = Number(t.price_15_days);
+            if (specialPrice > 0) finalPrice = specialPrice;
+          } else if (isRoundTrip === "true" && t.round_trip_prices && typeof t.round_trip_prices === 'object') {
+            // Buscamos el precio redondo en la BD
             const roundPrice = Number(t.round_trip_prices[destination]);
             if (roundPrice > 0) finalPrice = roundPrice;
           }
@@ -167,7 +171,8 @@ export default function SearchResultsScreen() {
             departureTime: segmentData.dep,
             arrivalTime: segmentData.arr,
             duration: segmentData.dur,
-            price: finalPrice, // Este es el precio que se le cobrará
+            price: finalPrice, 
+            price_15_days: t.price_15_days, // Lo guardamos por si acaso
             availableSeats: t.available_seats,
             totalSeats: t.total_seats,
             busType: t.bus_type,
@@ -213,7 +218,7 @@ export default function SearchResultsScreen() {
     };
 
     fetchAndCalculateTrips();
-  }, [origin, destination, date, isRoundTrip]); // <-- Agregamos isRoundTrip aquí
+  }, [origin, destination, date, isRoundTrip, is15Days]); // <-- Agregamos is15Days aquí
 
   const handleSelect = (trip: Trip) => {
     if (trip.availableSeats <= 0) return; 
@@ -221,12 +226,13 @@ export default function SearchResultsScreen() {
     setPendingTrip(trip);
     setPendingSeats([]);
     
-    // --- MAGIA: Mandamos el estado de viaje redondo hacia la selección de asientos ---
+    // --- MAGIA: Mandamos el estado hacia la selección de asientos ---
     router.push({
       pathname: "/seat-selection",
       params: { 
         isRoundTrip,
-        returnDate
+        returnDate,
+        is15Days // <-- PASAMOS LA ESTAFETA AL MAPA DE ASIENTOS
       }
     }); 
   };
@@ -257,7 +263,7 @@ export default function SearchResultsScreen() {
             {origin} a {destination}
           </Text>
           <Text style={[styles.dateText, { color: colors.primary }]}>
-            {formattedDate} {isRoundTrip === "true" ? "(Ida y Vuelta)" : ""}
+            {formattedDate} {isRoundTrip === "true" ? "(Ida y Vuelta)" : is15Days === "true" ? "(Paquete 15 Días)" : ""}
           </Text>
         </View>
       </View>

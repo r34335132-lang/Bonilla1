@@ -23,10 +23,11 @@ export default function SeatSelectionScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // Recibimos los parámetros de si es Viaje Redondo
-  const { isRoundTrip, returnDate } = useLocalSearchParams<{
+  // --- MAGIA: Atrapamos también la instrucción de 15 Días ---
+  const { isRoundTrip, returnDate, is15Days } = useLocalSearchParams<{
     isRoundTrip?: string;
     returnDate?: string;
+    is15Days?: string; // <-- NUEVO
   }>();
   
   const { pendingTrip, pendingSeats, setPendingSeats } = useBooking();
@@ -40,8 +41,6 @@ export default function SeatSelectionScreen() {
     const fetchAndCalculateSeats = async () => {
       setIsCalculating(true);
       try {
-        // --- AQUÍ ESTÁ LA SOLUCIÓN AL ERROR QUE CONGELABA LA PANTALLA ---
-        // Agregamos !bookings_trip_id_fkey para que Supabase sepa qué viaje revisar
         const { data, error } = await supabase
           .from("bookings")
           .select("status, seats, trip:trips!bookings_trip_id_fkey(origin, destination)")
@@ -100,12 +99,13 @@ export default function SeatSelectionScreen() {
   };
 
   const handleContinue = () => {
-    // Llevamos los parámetros de "Ida y Vuelta" hacia la pantalla de pago
+    // --- MAGIA: Pasamos la instrucción de 15 Días a la caja registradora (Checkout) ---
     router.push({
       pathname: "/checkout",
       params: {
         isRoundTrip,
-        returnDate
+        returnDate,
+        is15Days // <-- PASAMOS LA ESTAFETA
       }
     });
   };
