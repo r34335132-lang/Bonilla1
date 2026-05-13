@@ -12,7 +12,8 @@ import { useAuth } from "@/contexts/AuthContext";
 
 function NativeTabLayout() {
   const { role } = useAuth();
-  const isAdmin = role === "admin";
+  // MAGIA: Permitimos tanto a admin como a supervisor
+  const hasAdminAccess = role === "admin" || role === "supervisor";
 
   return (
     <NativeTabs>
@@ -25,7 +26,7 @@ function NativeTabLayout() {
         <Label>Mis Viajes</Label>
       </NativeTabs.Trigger>
       
-      {/* MAGIA: Pestaña de Paquetería Nativa */}
+      {/* Pestaña de Paquetería Nativa */}
       <NativeTabs.Trigger name="paqueteria">
         <Icon sf={{ default: "shippingbox", selected: "shippingbox.fill" }} />
         <Label>Paquetes</Label>
@@ -36,10 +37,11 @@ function NativeTabLayout() {
         <Label>Perfil</Label>
       </NativeTabs.Trigger>
       
-      {isAdmin && (
+      {/* Mostramos la pestaña si es admin o supervisor */}
+      {hasAdminAccess && (
         <NativeTabs.Trigger name="admin">
           <Icon sf={{ default: "shield", selected: "shield.fill" }} />
-          <Label>Admin</Label>
+          <Label>Panel</Label>
         </NativeTabs.Trigger>
       )}
     </NativeTabs>
@@ -52,8 +54,10 @@ function ClassicTabLayout() {
   const isDark = colorScheme === "dark";
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+  
   const { role } = useAuth();
-  const isAdmin = role === "admin";
+  // MAGIA: Permitimos tanto a admin como a supervisor
+  const hasAdminAccess = role === "admin" || role === "supervisor";
 
   return (
     <Tabs
@@ -116,7 +120,7 @@ function ClassicTabLayout() {
         }}
       />
       
-      {/* MAGIA: Pestaña de Paquetería Clásica (Android/Web) */}
+      {/* Pestaña de Paquetería Clásica (Android/Web) */}
       <Tabs.Screen
         name="paqueteria"
         options={{
@@ -154,8 +158,9 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="admin"
         options={{
-          title: "Admin",
-          href: isAdmin ? '/(tabs)/admin' : null, 
+          title: "Panel",
+          // Desbloqueamos el acceso si tiene permisos de admin o supervisor
+          href: hasAdminAccess ? '/(tabs)/admin' : null, 
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="shield" tintColor={color} size={22} />

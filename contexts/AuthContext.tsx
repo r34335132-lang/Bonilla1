@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Session, User as SupabaseUser } from "@supabase/supabase-js";
 
-export type UserRole = "customer" | "admin";
+export type UserRole = "customer" | "admin" | "supervisor";
 
 export interface GuestInfo {
   name: string;
