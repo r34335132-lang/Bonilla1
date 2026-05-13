@@ -33,8 +33,8 @@ const ROUTE_OFFSETS: Record<string, number> = {
   "Guadalajara": 600,
 };
 
-const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: string) => {
-  if (!trip.departure_time) return { dep: "", arr: "", dur: "", price: trip.price };
+const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: string, exactPrice: number) => {
+  if (!trip.departure_time) return { dep: "", arr: "", dur: "", price: exactPrice };
 
   const [hours, minutes] = trip.departure_time.split(":").map(Number);
   const baseMinutes = hours * 60 + minutes;
@@ -51,32 +51,10 @@ const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: strin
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   };
 
-  const durationMins = destOffset - originOffset;
+  const durationMins = Math.abs(destOffset - originOffset);
   const durH = Math.floor(durationMins / 60);
   const durM = durationMins % 60;
   const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
-
-  let exactPrice = trip.price; 
-  
-  if (trip.prices && typeof trip.prices === 'object' && Object.keys(trip.prices).length > 0) {
-    if (trip.origin === searchOrigin) {
-      const directPrice = Number(trip.prices[searchDest]);
-      if (directPrice > 0) exactPrice = directPrice;
-    } else {
-      const priceToDest = Number(trip.prices[searchDest]) || 0;
-      const priceToOrigin = Number(trip.prices[searchOrigin]) || 0;
-      
-      if (priceToDest > priceToOrigin && priceToOrigin > 0) {
-        exactPrice = priceToDest - priceToOrigin;
-      } else {
-        const tripTotalMins = 600;
-        exactPrice = Math.round(((trip.price / tripTotalMins) * durationMins) / 10) * 10;
-      }
-    }
-  } else {
-    const tripTotalMins = 600;
-    exactPrice = Math.round(((trip.price / tripTotalMins) * durationMins) / 10) * 10;
-  }
 
   return {
     dep: formatTime(depTotal),
@@ -90,14 +68,13 @@ export default function SearchResultsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   
-  // --- MAGIA NUEVA: Recibimos también is15Days desde el Home ---
   const { origin, destination, date, isRoundTrip, returnDate, is15Days } = useLocalSearchParams<{
     origin: string;
     destination: string;
     date: string;
     isRoundTrip?: string;
     returnDate?: string;
-    is15Days?: string; // <-- NUEVO
+    is15Days?: string; 
   }>();
   const { setPendingTrip, setPendingSeats } = useBooking();
 
@@ -127,11 +104,14 @@ export default function SearchResultsScreen() {
         const searchStart = BONILLA_ROUTE.indexOf(origin);
         const searchEnd = BONILLA_ROUTE.indexOf(destination);
 
-        if (searchStart === -1 || searchEnd === -1 || searchStart >= searchEnd) {
+        if (searchStart === -1 || searchEnd === -1 || searchStart === searchEnd) {
           setLiveTrips([]);
           return;
         }
 
+        const isGoingSouth = searchStart < searchEnd;
+
+        // 1. Traer los viajes programados para ese día
         const { data: tripsData, error: tripsError } = await supabase
           .from("trips")
           .select("*")
@@ -139,10 +119,23 @@ export default function SearchResultsScreen() {
 
         if (tripsError) throw tripsError;
 
+        // 2. Filtrar viajes que cubran esta ruta 
         const validTrips = (tripsData || []).filter((trip) => {
           const tripStart = BONILLA_ROUTE.indexOf(trip.origin);
           const tripEnd = BONILLA_ROUTE.indexOf(trip.destination);
-          return searchStart >= tripStart && searchEnd <= tripEnd;
+          
+          if (tripStart === -1 || tripEnd === -1 || tripStart === tripEnd) return false;
+          
+          const tripGoesSouth = tripStart < tripEnd;
+
+          // El camión debe ir en la misma dirección que el cliente
+          if (isGoingSouth !== tripGoesSouth) return false;
+
+          if (isGoingSouth) {
+            return tripStart <= searchStart && tripEnd >= searchEnd;
+          } else {
+            return tripStart >= searchStart && tripEnd <= searchEnd;
+          }
         });
 
         if (validTrips.length === 0) {
@@ -150,32 +143,36 @@ export default function SearchResultsScreen() {
           return;
         }
 
-        const formattedTrips = validTrips.map(t => {
-          const segmentData = calculateSegmentData(t, origin, destination);
-          
-          let finalPrice = segmentData.price;
-          
-          // --- AQUÍ APLICAMOS LA TARIFA DE 15 DÍAS O IDA Y VUELTA ---
-          if (is15Days === "true" && t.price_15_days) {
-            // Buscamos el precio especial de 15 días en la BD
-            const specialPrice = Number(t.price_15_days);
-            if (specialPrice > 0) finalPrice = specialPrice;
-          } else if (isRoundTrip === "true" && t.round_trip_prices && typeof t.round_trip_prices === 'object') {
-            // Buscamos el precio redondo en la BD
-            const roundPrice = Number(t.round_trip_prices[destination]);
-            if (roundPrice > 0) finalPrice = roundPrice;
-          }
+        // 3. Buscar el precio exacto en el Tarifario Global (Igual que en la Web)
+        const { data: priceData } = await supabase
+          .from("route_prices")
+          .select("*")
+          .or(`and(origin.eq.${origin},destination.eq.${destination}),and(origin.eq.${destination},destination.eq.${origin})`)
+          .single();
 
+        let exactPrice = 0;
+        
+        if (priceData) {
+          if (is15Days === "true") exactPrice = priceData.price_15_days;
+          else if (isRoundTrip === "true") exactPrice = priceData.price_round_trip;
+          else exactPrice = priceData.price_one_way;
+        }
+
+        const formattedTrips = validTrips.map(t => {
+            // Si por alguna razón no hay tarifa guardada, usamos un valor de fallback
+            const finalPrice = exactPrice > 0 ? exactPrice : t.price;
+            const segmentData = calculateSegmentData(t, origin, destination, finalPrice);
+          
           return {
             id: t.id,
-            origin: origin,
+            origin: origin, 
             destination: destination,
             date: t.date,
             departureTime: segmentData.dep,
             arrivalTime: segmentData.arr,
             duration: segmentData.dur,
-            price: finalPrice, 
-            price_15_days: t.price_15_days, // Lo guardamos por si acaso
+            price: segmentData.price, 
+            price_15_days: is15Days === "true" ? finalPrice : 0, 
             availableSeats: t.available_seats,
             totalSeats: t.total_seats,
             busType: t.bus_type,
@@ -186,9 +183,10 @@ export default function SearchResultsScreen() {
 
         const tripIds = formattedTrips.map((t) => t.id);
         
+        // 4. Checar la disponibilidad de asientos real en ese tramo
         const { data: bookingsData, error: bookingsError } = await supabase
           .from("bookings")
-          .select("trip_id, status, seats, trip:trips!bookings_trip_id_fkey(origin, destination)")
+          .select("trip_id, status, seats, origin, destination")
           .in("trip_id", tripIds)
           .neq("status", "cancelled");
 
@@ -201,7 +199,7 @@ export default function SearchResultsScreen() {
               .map((b: any) => ({
                 status: b.status,
                 seats: b.seats,
-                trip: { origin: b.trip.origin, destination: b.trip.destination },
+                trip: { origin: b.origin, destination: b.destination }, // Importante: usar origin/dest de la reserva
               }));
 
             const occupiedSeats = getOccupiedSeatsForSegment(tripBookings, origin, destination);
@@ -229,13 +227,13 @@ export default function SearchResultsScreen() {
     setPendingTrip(trip);
     setPendingSeats([]);
     
-    // --- MAGIA: Mandamos el estado hacia la selección de asientos ---
+    // --- Mandamos el estado hacia la selección de asientos ---
     router.push({
       pathname: "/seat-selection",
       params: { 
         isRoundTrip,
         returnDate,
-        is15Days // <-- PASAMOS LA ESTAFETA AL MAPA DE ASIENTOS
+        is15Days 
       }
     }); 
   };

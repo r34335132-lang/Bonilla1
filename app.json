@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Bonilla Tour's",
+    "name": "Bonilla Tours",
     "slug": "bonilla-tours",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -17,7 +17,15 @@
       "supportsTablet": false
     },
     "android": {
-      "package": "com.raulbri123.bonillatours"
+      "package": "com.raulbri123.bonillatoursapp",
+      "versionCode": 3,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#1A56DB"
+      },
+      "permissions": [
+        "CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
