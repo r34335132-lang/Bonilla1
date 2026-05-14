@@ -39,11 +39,19 @@ const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: strin
   const [hours, minutes] = trip.departure_time.split(":").map(Number);
   const baseMinutes = hours * 60 + minutes;
 
-  const originOffset = ROUTE_OFFSETS[searchOrigin] || 0;
-  const destOffset = ROUTE_OFFSETS[searchDest] || 0;
+  // Calculamos las distancias relativas desde donde realmente empieza el viaje
+  const tripStartOffset = ROUTE_OFFSETS[trip.origin] || 0;
+  const searchOriginOffset = ROUTE_OFFSETS[searchOrigin] || 0;
+  const searchDestOffset = ROUTE_OFFSETS[searchDest] || 0;
 
-  const depTotal = baseMinutes + originOffset;
-  const arrTotal = baseMinutes + destOffset;
+  // Minutos desde donde arranca el camión principal hasta donde se SUBE el pasajero
+  const timeToOrigin = Math.abs(searchOriginOffset - tripStartOffset);
+  
+  // Minutos desde donde arranca el camión principal hasta donde se BAJA el pasajero
+  const timeToDest = Math.abs(searchDestOffset - tripStartOffset);
+
+  const depTotal = baseMinutes + timeToOrigin;
+  const arrTotal = baseMinutes + timeToDest;
 
   const formatTime = (totalMins: number) => {
     const h = Math.floor(totalMins / 60) % 24;
@@ -51,7 +59,7 @@ const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: strin
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   };
 
-  const durationMins = Math.abs(destOffset - originOffset);
+  const durationMins = Math.abs(searchDestOffset - searchOriginOffset);
   const durH = Math.floor(durationMins / 60);
   const durM = durationMins % 60;
   const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
@@ -119,7 +127,7 @@ export default function SearchResultsScreen() {
 
         if (tripsError) throw tripsError;
 
-        // 2. Filtrar viajes que cubran esta ruta 
+        // 2. Filtrar viajes que cubran esta ruta (ida o regreso)
         const validTrips = (tripsData || []).filter((trip) => {
           const tripStart = BONILLA_ROUTE.indexOf(trip.origin);
           const tripEnd = BONILLA_ROUTE.indexOf(trip.destination);
@@ -143,24 +151,30 @@ export default function SearchResultsScreen() {
           return;
         }
 
-        // 3. Buscar el precio exacto en el Tarifario Global (Igual que en la Web)
-        const { data: priceData } = await supabase
+        // 3. Método a prueba de fallos para encontrar el precio exacto
+        const { data: allPrices, error: pricesError } = await supabase
           .from("route_prices")
-          .select("*")
-          .or(`and(origin.eq.${origin},destination.eq.${destination}),and(origin.eq.${destination},destination.eq.${origin})`)
-          .single();
+          .select("*");
 
         let exactPrice = 0;
         
-        if (priceData) {
-          if (is15Days === "true") exactPrice = priceData.price_15_days;
-          else if (isRoundTrip === "true") exactPrice = priceData.price_round_trip;
-          else exactPrice = priceData.price_one_way;
+        if (!pricesError && allPrices) {
+          // Buscamos manualmente en el arreglo para evitar errores de sintaxis en Supabase con espacios en blanco
+          const priceData = allPrices.find(p => 
+            (p.origin === origin && p.destination === destination) || 
+            (p.origin === destination && p.destination === origin)
+          );
+
+          if (priceData) {
+            if (is15Days === "true") exactPrice = Number(priceData.price_15_days);
+            else if (isRoundTrip === "true") exactPrice = Number(priceData.price_round_trip);
+            else exactPrice = Number(priceData.price_one_way);
+          }
         }
 
         const formattedTrips = validTrips.map(t => {
             // Si por alguna razón no hay tarifa guardada, usamos un valor de fallback
-            const finalPrice = exactPrice > 0 ? exactPrice : t.price;
+            const finalPrice = exactPrice > 0 ? exactPrice : Number(t.price);
             const segmentData = calculateSegmentData(t, origin, destination, finalPrice);
           
           return {
