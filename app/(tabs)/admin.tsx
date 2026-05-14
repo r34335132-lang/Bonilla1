@@ -1,5 +1,7 @@
 import { Feather } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import {
   ActivityIndicator,
   Alert,
@@ -41,7 +43,7 @@ const DISTANCES_KM: Record<string, number> = {
 };
 
 // COSTO POR KILÓMETRO RECORRIDO
-const PRICE_PER_KM = 16; 
+const PRICE_PER_KM = 1.3; 
 
 type AdminTab = "dashboard" | "trips" | "paqueteria" | "fans" | "scanner";
 
@@ -56,8 +58,13 @@ export default function AdminScreen() {
   const [users, setUsers] = useState<any[]>([]);
   const [tripsList, setTripsList] = useState<any[]>([]);
   const [parcels, setParcels] = useState<any[]>([]); 
-  const [routePrices, setRoutePrices] = useState<any[]>([]); // NUEVO: Para guardar el tarifario global
+  const [routePrices, setRoutePrices] = useState<any[]>([]); 
   const [loading, setLoading] = useState(false);
+
+  // --- NUEVO: ESTADO PARA FILTRO DE FECHA ---
+  const [selectedDate, setSelectedDate] = useState<string>(
+    new Date().toISOString().split('T')[0] // Hoy por defecto
+  );
 
   // Estados Escáner QR
   const [permission, requestPermission] = useCameraPermissions();
@@ -92,7 +99,7 @@ export default function AdminScreen() {
       if (role === "admin") fetchUsers(); 
       fetchTrips(); 
       fetchParcels(); 
-      fetchRoutePrices(); // Cargamos el tarifario al iniciar
+      fetchRoutePrices(); 
     }
   }, [role]);
 
@@ -101,7 +108,6 @@ export default function AdminScreen() {
   const fetchTrips = async () => { setLoading(true); try { const { data } = await supabase.from("trips").select("*").order("date", { ascending: true }); setTripsList(data || []); } catch (error) {} finally { setLoading(false); } };
   const fetchParcels = async () => { try { const { data } = await supabase.from("parcels").select("*").order("created_at", { ascending: false }); setParcels(data || []); } catch (error) {} };
   
-  // NUEVO: Traer el tarifario para usarlo en la app móvil
   const fetchRoutePrices = async () => {
     try {
       const { data } = await supabase.from('route_prices').select('*');
@@ -118,6 +124,31 @@ export default function AdminScreen() {
     } catch (error: any) { Alert.alert("Error", "No se pudieron cargar los pasajeros."); } finally { setLoadingPassengers(false); }
   };
 
+  // --- FUNCIONES AUXILIARES DE PRECIO DINAMICO ---
+  const getExactPrice = (origin: string, dest: string, fallback: number = 0) => {
+    if (!routePrices || routePrices.length === 0) return fallback;
+    const route = routePrices.find(p => 
+      (p.origin === origin && p.destination === dest) || 
+      (p.origin === dest && p.destination === origin)
+    );
+    return route && route.price_one_way ? Number(route.price_one_way) : fallback;
+  };
+
+  const calculateDistancePrice = () => {
+    const kmOrigin = DISTANCES_KM[sellForm.sellOrigin] || 0;
+    const kmDest = DISTANCES_KM[sellForm.sellDest] || 0;
+    const totalKm = Math.abs(kmDest - kmOrigin);
+    const price = Math.round(totalKm * PRICE_PER_KM);
+    return { km: totalKm, price: price > 0 ? price : 50 }; // $50 mínimo
+  };
+
+  // --- FILTRO DE VIAJES POR FECHA (USANDO useMemo) ---
+  const filteredTrips = useMemo(() => {
+    if (!selectedDate) return tripsList;
+    return tripsList.filter(trip => trip.date === selectedDate);
+  }, [tripsList, selectedDate]);
+
+
   const handleManualBoarding = async (bookingId: string, passengerName: string) => {
     Alert.alert("Confirmar Abordaje", `¿Marcar a ${passengerName} como ABORDADO manualmente?`, [
       { text: "Cancelar", style: "cancel" },
@@ -132,29 +163,115 @@ export default function AdminScreen() {
     ]);
   };
 
-  // --- CÁLCULO DE DISTANCIA (X KILOMETRO) ---
-  const calculateDistancePrice = () => {
-    const kmOrigin = DISTANCES_KM[sellForm.sellOrigin] || 0;
-    const kmDest = DISTANCES_KM[sellForm.sellDest] || 0;
-    const totalKm = Math.abs(kmDest - kmOrigin);
-    const price = Math.round(totalKm * PRICE_PER_KM);
-    return { km: totalKm, price: price > 0 ? price : 50 }; // $50 mínimo
+  const handleMarkAsPaid = async (bookingId: string, passengerName: string) => {
+    Alert.alert("Confirmar Pago", `¿Marcar el boleto de ${passengerName} como PAGADO en taquilla?`, [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Sí, pagado", onPress: async () => {
+          try {
+            const { error } = await supabase.from('bookings').update({ status: 'confirmed' }).eq('id', bookingId);
+            if (error) throw error;
+            setTripPassengers(prev => prev.map(p => p.id === bookingId ? { ...p, status: 'confirmed' } : p));
+            Alert.alert("Éxito", "El boleto ha sido marcado como pagado.");
+          } catch (err: any) { Alert.alert("Error", "No se pudo actualizar el estado."); }
+        }
+      }
+    ]);
   };
 
-  // --- OBTENER PRECIO EXACTO DEL TARIFARIO WEB ---
-  const getExactPrice = (origin: string, dest: string, fallback: number) => {
-    if (!routePrices || routePrices.length === 0) return fallback;
-    const route = routePrices.find(p => 
-      (p.origin === origin && p.destination === dest) || 
-      (p.origin === dest && p.destination === origin)
-    );
-    return route && route.price_one_way ? Number(route.price_one_way) : fallback;
+  const handlePrintBoletoAdmin = async (booking: any) => {
+    try {
+      const is15Days = booking.is_15_days;
+      const isRoundTrip = booking.is_round_trip;
+      const tipoViaje = is15Days ? 'Paquete 15 Días' : isRoundTrip ? 'Viaje Redondo' : 'Viaje Sencillo';
+      const asientosStr = booking.seats && booking.seats.length > 0 ? booking.seats.join(', ') : 'Asignado al abordar';
+      const logoUrl = "https://gisyiiljfplywcfhxxem.supabase.co/storage/v1/object/public/fls/WhatsApp%20Image%202026-05-04%20at%205.53.38%20PM.jpeg"; 
+
+      const qrUrl = `https://bonillawww.vercel.app/?folio=${booking.id}`;
+      const qrData = encodeURIComponent(qrUrl);
+
+      const html = `
+        <html><head><style>
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: auto; }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
+          .header img { max-width: 280px; margin-bottom: 10px; }
+          .header h2 { margin: 5px 0 0 0; color: #555; font-size: 18px; letter-spacing: 2px; }
+          .content { display: flex; justify-content: space-between; }
+          .info { width: 65%; }
+          .qr-section { width: 30%; text-align: center; }
+          .qr-section img { width: 150px; height: 150px; margin-bottom: 10px; }
+          .row { margin-bottom: 15px; }
+          .label { font-size: 12px; color: #777; text-transform: uppercase; font-weight: bold; display: block; margin-bottom: 2px; }
+          .value { font-size: 18px; font-weight: bold; color: #000; }
+          .highlight { background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #b91c1c; }
+          .terms { margin-top: 40px; font-size: 11px; color: #555; border-top: 1px solid #ccc; padding-top: 20px; text-align: justify; line-height: 1.5; }
+          .terms h4 { margin-top: 0; color: #000; font-size: 14px; }
+        </style></head><body>
+          <div class="header">
+            <img src="${logoUrl}" alt="Bonilla Tours" />
+            <h2>BOLETO REGULAR</h2>
+          </div>
+          <div class="content">
+            <div class="info">
+              <div class="row">
+                <span class="label">Pasajero/a</span>
+                <span class="value">${booking.passenger_name}</span>
+              </div>
+              <div class="row highlight">
+                <span class="label">Ruta</span>
+                <span class="value" style="font-size: 24px;">${booking.origin} a ${booking.destination}</span>
+              </div>
+              <div class="row">
+                <span class="label">Fecha y hora de viaje</span>
+                <span class="value">${selectedTrip?.date} - ${selectedTrip?.departure_time}</span>
+              </div>
+              <div class="row">
+                <span class="label">Viaje</span>
+                <span class="value">Destino: ${selectedTrip?.destination} | ${tipoViaje}</span>
+              </div>
+              <div class="row" style="display: flex; gap: 40px;">
+                <div>
+                  <span class="label">Asiento(s)</span>
+                  <span class="value">${asientosStr}</span>
+                </div>
+                <div>
+                  <span class="label">Total Pagado</span>
+                  <span class="value">$ ${Number(booking.total_price).toFixed(2)} MXN</span>
+                </div>
+              </div>
+            </div>
+            <div class="qr-section">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrData}" alt="QR Code" />
+              <div class="label">Folio de Reserva</div>
+              <div class="value" style="font-size: 16px;">${booking.id}</div>
+              <div style="margin-top: 20px; font-size: 12px; color: #666;">
+                <strong>Emitido:</strong><br/>${new Date(booking.created_at).toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div class="terms">
+            <h4>TÉRMINOS Y CONDICIONES</h4>
+            <p>Deberá presentarse por lo menos 20 minutos antes del horario seleccionado en el punto de encuentro establecido en su reservación o itinerario.</p>
+            <p>Para abordar, deberá presentar el código QR de su reservación o el folio impreso en este boleto.</p>
+            <p>Para garantizar que los usuarios lleguen a tiempo a su destino, únicamente otorgamos 5 minutos de tolerancia en espera. Una vez transcurrido ese tiempo, el conductor dará comienzo al viaje. Situaciones excepcionales se valorarán y gestionarán de mutuo acuerdo entre empresa y usuarios.</p>
+            <p>Cabe tener en cuenta que algún punto de encuentro o descenso puede cambiar a causa de situaciones ajenas a la empresa, tales como obras, bloqueos, accidentes etc. En tal caso, se les informará a los usuarios con antelación si ello fuera posible. De otro modo, se acordará con los usuarios una opción conveniente.</p>
+            <h4 style="margin-top: 15px;">Cancelaciones</h4>
+            <p>Las cancelaciones tienen un costo del 10% (trámite exclusivo en oficina) y aplican siempre y cuando se soliciten con al menos 1 hora de anticipación a la salida.</p>
+          </div>
+        </body></html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "No se pudo generar el documento PDF.");
+    }
   };
 
-  // --- FUNCIÓN UNIFICADA DE VENTA RÁPIDA ---
   const executeSell = async (isGlobal: boolean) => {
     const tId = isGlobal ? sellForm.tripId : selectedTrip?.id;
-    const tPrice = isGlobal ? sellForm.tripPrice : selectedTrip?.price;
+    // Utilizamos el tarifario dinamico como base si esta disponible
+    const dynamicBasePrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, selectedTrip?.price);
 
     if (!tId) return Alert.alert("Error", "Debes seleccionar a qué viaje se subirá el pasajero.");
     if (!sellForm.name.trim()) return Alert.alert("Error", "Ingresa el nombre del pasajero.");
@@ -164,20 +281,16 @@ export default function AdminScreen() {
     
     setIsSelling(true);
     try {
-      // 1. Calculamos ambas opciones (Tarifario Normal vs Por Distancia)
       const distInfo = calculateDistancePrice();
-      const exactNormalPrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, tPrice);
+      // Ya usamos el precio dinámico calculado arriba
+      const exactNormalPrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, dynamicBasePrice);
       
-      // 2. Elegimos la que haya seleccionado el supervisor en el UI
       const finalPrice = sellForm.type === 'distancia' ? distInfo.price : exactNormalPrice;
       const finalCommission = sellForm.takeCommission ? 100 : 0;
       const bookingRef = "BT-" + Math.floor(100000 + Math.random() * 900000).toString().slice(0, 6);
 
-      const passOrigin = sellForm.sellOrigin;
-      const passDest = sellForm.sellDest;
-
       const { error } = await supabase.from('bookings').insert({
-        booking_ref: bookingRef, trip_id: tId, passenger_name: sellForm.name, passenger_email: "venta_rapida@bonillatours.com", passenger_phone: "0000000000", payment_method: "cash", status: "boarded", is_guest: true, total_price: finalPrice, origin: passOrigin, destination: passDest, seats: sellForm.seat ? [Number(sellForm.seat)] : [], commission_amount: finalCommission, is_distance_ticket: sellForm.type === 'distancia'
+        booking_ref: bookingRef, trip_id: tId, passenger_name: sellForm.name, passenger_email: "venta_rapida@bonillatours.com", passenger_phone: "0000000000", payment_method: "cash", status: "boarded", is_guest: true, total_price: finalPrice, origin: sellForm.sellOrigin, destination: sellForm.sellDest, seats: sellForm.seat ? [Number(sellForm.seat)] : [], commission_amount: finalCommission, is_distance_ticket: sellForm.type === 'distancia'
       });
 
       if (error) throw error;
@@ -220,9 +333,20 @@ export default function AdminScreen() {
   const handleBarCodeScanned = async ({ type, data }: { type: string, data: string }) => {
     setScanned(true);
     try {
-      const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data);
+      let rawData = data;
+      if (data.includes('bonillawww.vercel.app')) {
+        try {
+          const url = new URL(data);
+          rawData = url.searchParams.get('folio') || url.searchParams.get('id') || rawData;
+        } catch (e) {
+          const match = data.match(/folio=([^&]+)/);
+          if (match) rawData = match[1];
+        }
+      }
+
+      const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(rawData);
       let query = supabase.from('bookings').select('*, trips(origin, destination, date)');
-      if (isUUID) query = query.eq('id', data); else query = query.eq('booking_ref', data);
+      if (isUUID) query = query.eq('id', rawData); else query = query.eq('booking_ref', rawData);
 
       const { data: booking, error: fetchError } = await query.single();
       if (fetchError || !booking) throw new Error("No se encontró el boleto.");
@@ -234,21 +358,12 @@ export default function AdminScreen() {
     } catch (err: any) { Alert.alert("Error", err.message || "No se pudo procesar.", [{ text: "Intentar de nuevo", onPress: () => setScanned(false) }]); }
   };
 
-  const toggleFanStatus = async (userId: string, currentStatus: boolean) => {
-    if (role !== "admin") return; 
-    try {
-      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, is_fan: !currentStatus } : u)));
-      await supabase.from("profiles").update({ is_fan: !currentStatus }).eq("id", userId);
-    } catch (error: any) { Alert.alert("Error", error.message); fetchUsers(); }
-  };
-
   // --- RENDERIZADO DEL FORMULARIO Y SELECTORES (REUTILIZABLE) ---
   const renderSellModalContent = (isGlobal: boolean) => {
     const distInfo = calculateDistancePrice();
-    const baseP = isGlobal ? sellForm.tripPrice : (selectedTrip?.price || 0);
-    const exactNormalPrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, baseP);
+    const dynamicBaseP = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, selectedTrip?.price);
+    const exactNormalPrice = isGlobal ? getExactPrice(sellForm.sellOrigin, sellForm.sellDest, sellForm.tripPrice) : dynamicBaseP;
 
-    // Si el selector está activo, REEMPLAZA el formulario temporalmente
     if (['sellTrip', 'sellOrigin', 'sellDest'].includes(pickerType || '')) {
       return (
         <View style={{ height: 450 }}>
@@ -293,7 +408,6 @@ export default function AdminScreen() {
       )
     }
 
-    // SI NO HAY SELECTOR, MUESTRA EL FORMULARIO
     return (
       <View>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -322,7 +436,6 @@ export default function AdminScreen() {
             </View>
           </View>
 
-          {/* RUTA DEL PASAJERO: SIEMPRE VISIBLE */}
           <View>
             <Text style={styles.labelModal}>{isGlobal ? '3.' : ''} Ruta del Pasajero</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -341,7 +454,6 @@ export default function AdminScreen() {
             </View>
           </View>
 
-          {/* TIPO DE COBRO (Usa los datos de arriba para calcular precio) */}
           <View>
             <Text style={styles.labelModal}>{isGlobal ? '4.' : ''} Tipo de Cobro</Text>
             <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -378,8 +490,8 @@ export default function AdminScreen() {
     );
   };
 
-  const totalSeats = tripsList.reduce((acc, trip) => acc + trip.total_seats, 0);
-  const availableSeats = tripsList.reduce((acc, trip) => acc + trip.available_seats, 0);
+  const totalSeats = filteredTrips.reduce((acc, trip) => acc + trip.total_seats, 0);
+  const availableSeats = filteredTrips.reduce((acc, trip) => acc + trip.available_seats, 0);
   const soldSeats = totalSeats - availableSeats;
   const salesPercentage = totalSeats === 0 ? 0 : Math.round((soldSeats / totalSeats) * 100);
 
@@ -444,7 +556,7 @@ export default function AdminScreen() {
           </View>
           
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 16 }]}>
-            <Text style={[styles.cardTitle, { color: colors.foreground, marginBottom: 16 }]}>Rendimiento de Asientos</Text>
+            <Text style={[styles.cardTitle, { color: colors.foreground, marginBottom: 16 }]}>Rendimiento Global</Text>
             <View style={styles.barContainer}>
               <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8}}>
                 <Text style={{color: colors.mutedForeground, fontWeight: '600'}}>Ocupación Total</Text><Text style={{color: colors.foreground, fontWeight: '800'}}>{salesPercentage}%</Text>
@@ -487,24 +599,49 @@ export default function AdminScreen() {
             </View>
           )}
 
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Viajes Programados (Ver Pasajeros)</Text>
+          {/* NUEVO: CONTROLES DE FILTRO POR FECHA */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginTop: 8 }}>
+             <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Viajes Programados</Text>
+             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.muted, borderRadius: 8, paddingHorizontal: 12 }}>
+                <Feather name="calendar" size={16} color={colors.foreground} />
+                <TextInput 
+                   style={{ height: 40, width: 100, marginLeft: 8, color: colors.foreground, fontWeight: '600' }}
+                   value={selectedDate}
+                   onChangeText={setSelectedDate}
+                   placeholder="YYYY-MM-DD"
+                   placeholderTextColor={colors.mutedForeground}
+                />
+             </View>
+          </View>
+
           {loading ? <ActivityIndicator color={colors.primary} /> : (
-            tripsList.map((trip) => (
-              <TouchableOpacity key={trip.id} style={[styles.tripItem, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {
-                  setSelectedTrip(trip);
-                  setSellForm(prev => ({...prev, sellOrigin: trip.origin, sellDest: trip.destination}));
-                  fetchPassengersForTrip(trip.id);
-                }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.tripDate, { color: colors.foreground }]}>{trip.date} • {trip.departure_time}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 13 }}>{trip.origin} - {trip.destination}</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={{ color: colors.primary, fontWeight: '800' }}>${trip.price}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{trip.available_seats} asnt. libres</Text>
-                </View>
-              </TouchableOpacity>
-            ))
+            filteredTrips.length === 0 ? (
+               <Text style={{ textAlign: 'center', color: colors.mutedForeground, marginTop: 20 }}>
+                 No hay viajes registrados para la fecha: {selectedDate}
+               </Text>
+            ) : (
+              filteredTrips.map((trip) => {
+                // Obtenemos el precio real para mostrar en la lista de la ruta origen-destino
+                const realPrice = getExactPrice(trip.origin, trip.destination, trip.price);
+
+                return (
+                  <TouchableOpacity key={trip.id} style={[styles.tripItem, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {
+                      setSelectedTrip(trip);
+                      setSellForm(prev => ({...prev, sellOrigin: trip.origin, sellDest: trip.destination}));
+                      fetchPassengersForTrip(trip.id);
+                    }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.tripDate, { color: colors.foreground }]}>{trip.date} • {trip.departure_time}</Text>
+                      <Text style={{ color: colors.mutedForeground, fontSize: 13 }}>{trip.origin} - {trip.destination}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={{ color: colors.primary, fontWeight: '800' }}>${realPrice}</Text>
+                      <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{trip.available_seats} asnt. libres</Text>
+                    </View>
+                  </TouchableOpacity>
+                )
+              })
+            )
           )}
         </ScrollView>
       )}
@@ -612,24 +749,48 @@ export default function AdminScreen() {
               contentContainerStyle={{ padding: 20 }}
               ListEmptyComponent={<View style={{ alignItems: 'center', marginTop: 40 }}><Feather name="info" size={48} color={colors.mutedForeground} style={{ marginBottom: 16 }} /><Text style={{ color: colors.mutedForeground, fontSize: 16, textAlign: 'center' }}>Aún no hay boletos vendidos.</Text></View>}
               renderItem={({ item }) => {
-                const isBoarded = item.status === 'boarded';
+                const statusColor = item.status === 'pending' ? '#eab308' : item.status === 'confirmed' ? colors.primary : '#10b981';
+                const statusText = item.status === 'pending' ? 'PENDIENTE' : item.status === 'confirmed' ? 'PAGADO' : 'ABORDÓ';
+
                 return (
                   <View style={[styles.passengerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: colors.foreground, fontWeight: '800', fontSize: 16, marginBottom: 4 }}>{item.passenger_name}</Text>
-                      {item.is_distance_ticket && (
-                        <Text style={{ color: '#E67E22', fontSize: 11, fontWeight: 'bold', marginBottom: 2 }}>Viaje corto: {item.origin} a {item.destination}</Text>
-                      )}
-                      <Text style={{ color: colors.mutedForeground, fontSize: 13 }}>Asientos: <Text style={{ fontWeight: 'bold', color: colors.foreground }}>{item.seats.join(', ') || 'N/A'}</Text></Text>
-                      <Text style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 2 }}>Ref: {item.booking_ref}</Text>
+                    
+                    {/* INFO DEL PASAJERO */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.foreground, fontWeight: '800', fontSize: 16, marginBottom: 4 }}>{item.passenger_name}</Text>
+                        {item.is_distance_ticket && (
+                          <Text style={{ color: '#E67E22', fontSize: 11, fontWeight: 'bold', marginBottom: 2 }}>Viaje corto: {item.origin} a {item.destination}</Text>
+                        )}
+                        <Text style={{ color: colors.mutedForeground, fontSize: 13 }}>Asientos: <Text style={{ fontWeight: 'bold', color: colors.foreground }}>{item.seats.join(', ') || 'N/A'}</Text></Text>
+                        <Text style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 2 }}>Ref: {item.booking_ref}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                         <Text style={{fontWeight: '800', color: statusColor, fontSize: 12}}>{statusText}</Text>
+                      </View>
                     </View>
-                    {isBoarded ? (
-                      <View style={[styles.statusBadge, { backgroundColor: '#10b981' }]}><Text style={styles.statusBadgeText}>ABORDÓ</Text></View>
-                    ) : (
-                      <TouchableOpacity style={[styles.statusBadge, { backgroundColor: colors.primary, paddingVertical: 8, paddingHorizontal: 16 }]} onPress={() => handleManualBoarding(item.id, item.passenger_name)}>
-                        <Text style={[styles.statusBadgeText, { fontSize: 13 }]}>DAR ACCESO</Text>
+
+                    {/* BOTONES DE ACCION */}
+                    <View style={{ flexDirection: 'row', gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 16 }}>
+                      <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.muted }]} onPress={() => handlePrintBoletoAdmin(item)}>
+                        <Feather name="printer" size={16} color={colors.foreground} />
+                        <Text style={{color: colors.foreground, fontSize: 12, fontWeight: '700'}}>Imprimir</Text>
                       </TouchableOpacity>
-                    )}
+
+                      {item.status === 'pending' && (
+                        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#fef08a' }]} onPress={() => handleMarkAsPaid(item.id, item.passenger_name)}>
+                          <Feather name="dollar-sign" size={16} color="#ca8a04" />
+                          <Text style={{color: '#ca8a04', fontSize: 12, fontWeight: '700'}}>Pagado</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {item.status !== 'boarded' && (
+                        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.primary, flex: 1 }]} onPress={() => handleManualBoarding(item.id, item.passenger_name)}>
+                          <Feather name="check-circle" size={16} color="#fff" />
+                          <Text style={{color: '#fff', fontSize: 12, fontWeight: '700'}}>Dar Acceso</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
                 );
               }}
@@ -660,7 +821,7 @@ export default function AdminScreen() {
         </View>
       </Modal>
 
-      {/* --- 4. MODAL EXTERNO DE PAQUETERÍA (Solo origen/destino) --- */}
+      {/* --- 4. MODAL EXTERNO DE PAQUETERÍA --- */}
       <Modal visible={pickerType === 'origin' || pickerType === 'destination'} transparent={true} animationType="slide" onRequestClose={() => setPickerType(null)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card, paddingBottom: insets.bottom || 24 }]}>
@@ -746,9 +907,10 @@ const styles = StyleSheet.create({
 
   // Passenger Modal Styles
   modalHeaderFullScreen: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
-  passengerCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderRadius: 16, borderWidth: 1, marginBottom: 12 },
+  passengerCard: { flexDirection: 'column', padding: 16, borderRadius: 16, borderWidth: 1, marginBottom: 12 },
   statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   statusBadgeText: { color: '#fff', fontWeight: '900', fontSize: 12, letterSpacing: 0.5 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8 },
 
   // Estilos para Venta Rápida
   sellBtn: { backgroundColor: '#10b981', padding: 12, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
@@ -756,11 +918,5 @@ const styles = StyleSheet.create({
   sellModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 16 },
   sellModalContent: { backgroundColor: '#fff', borderRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10 },
   inputModal: { backgroundColor: '#f1f5f9', height: 48, borderRadius: 12, paddingHorizontal: 16, fontSize: 14, fontWeight: "500", borderBottomWidth: 0 },
-  labelModal: { fontSize: 11, fontWeight: "800", marginLeft: 4, marginBottom: 4, textTransform: "uppercase", color: '#475569' },
-
-  // Scanner
-  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.4)" },
-  scanTarget: { width: 250, height: 250, borderWidth: 2, borderColor: "#fff", borderRadius: 16, backgroundColor: "transparent" },
-  scanText: { color: "#fff", marginTop: 24, fontSize: 16, fontWeight: "700", backgroundColor: "rgba(0,0,0,0.6)", padding: 8, borderRadius: 8 },
-  scannedActions: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center" }
+  labelModal: { fontSize: 11, fontWeight: "800", marginLeft: 4, marginBottom: 4, textTransform: "uppercase", color: '#475569' }
 });

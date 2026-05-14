@@ -124,6 +124,10 @@ export default function MyTripsScreen() {
       
       const logoUrl = "https://gisyiiljfplywcfhxxem.supabase.co/storage/v1/object/public/fls/WhatsApp%20Image%202026-05-04%20at%205.53.38%20PM.jpeg"; 
 
+      // MAGIA: Creamos el link correcto y lo codificamos para el QR
+      const qrUrl = `https://bonillawww.vercel.app/?folio=${booking.id}`;
+      const qrData = encodeURIComponent(qrUrl);
+
       const html = `
         <html><head><style>
           body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: auto; }
@@ -175,7 +179,7 @@ export default function MyTripsScreen() {
               </div>
             </div>
             <div class="qr-section">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${booking.id}" alt="QR Code" />
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrData}" alt="QR Code" />
               <div class="label">Folio de Reserva</div>
               <div class="value" style="font-size: 16px;">${booking.id}</div>
               <div style="margin-top: 20px; font-size: 12px; color: #666;">

@@ -17,7 +17,8 @@ serve(async (req) => {
   }
 
   try {
-    const { title, quantity, price } = await req.json()
+    // AÑADIDO: Sacamos también el bookingId que mandamos desde la app
+    const { title, quantity, price, bookingId } = await req.json()
 
     // Monto exacto con 2 decimales
     const finalAmount = parseFloat((price * quantity).toFixed(2));
@@ -30,6 +31,7 @@ serve(async (req) => {
       amount: finalAmount,
       currency: "MXN",
       purchase_description: safeTitle,
+      custom_id: bookingId, // <--- EL TRUCO: Clip guardará este ID y nos lo devolverá en el webhook
       redirection_url: {
         success: "https://bonillatours.com",
         error: "https://bonillatours.com",
@@ -68,7 +70,7 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 
-  } catch (error) {
+  } catch (error: any) {
     return new Response(
       JSON.stringify({ ok: false, error: error.message }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
