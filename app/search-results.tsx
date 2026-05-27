@@ -39,11 +39,15 @@ const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: strin
   const [hours, minutes] = trip.departure_time.split(":").map(Number);
   const baseMinutes = hours * 60 + minutes;
 
-  const originOffset = ROUTE_OFFSETS[searchOrigin] || 0;
-  const destOffset = ROUTE_OFFSETS[searchDest] || 0;
+  const tripStartOffset = ROUTE_OFFSETS[trip.origin?.trim()] || 0;
+  const searchOriginOffset = ROUTE_OFFSETS[searchOrigin?.trim()] || 0;
+  const searchDestOffset = ROUTE_OFFSETS[searchDest?.trim()] || 0;
 
-  const depTotal = baseMinutes + originOffset;
-  const arrTotal = baseMinutes + destOffset;
+  const timeToOrigin = Math.abs(searchOriginOffset - tripStartOffset);
+  const timeToDest = Math.abs(searchDestOffset - tripStartOffset);
+
+  const depTotal = baseMinutes + timeToOrigin;
+  const arrTotal = baseMinutes + timeToDest;
 
   const formatTime = (totalMins: number) => {
     const h = Math.floor(totalMins / 60) % 24;
@@ -51,7 +55,7 @@ const calculateSegmentData = (trip: any, searchOrigin: string, searchDest: strin
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   };
 
-  const durationMins = Math.abs(destOffset - originOffset);
+  const durationMins = Math.abs(searchDestOffset - searchOriginOffset);
   const durH = Math.floor(durationMins / 60);
   const durM = durationMins % 60;
   const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
@@ -101,8 +105,10 @@ export default function SearchResultsScreen() {
       
       setIsCalculating(true);
       try {
-        const searchStart = BONILLA_ROUTE.indexOf(origin);
-        const searchEnd = BONILLA_ROUTE.indexOf(destination);
+        const sOrigin = origin.trim();
+        const sDest = destination.trim();
+        const searchStart = BONILLA_ROUTE.indexOf(sOrigin);
+        const searchEnd = BONILLA_ROUTE.indexOf(sDest);
 
         if (searchStart === -1 || searchEnd === -1 || searchStart === searchEnd) {
           setLiveTrips([]);
@@ -111,7 +117,7 @@ export default function SearchResultsScreen() {
 
         const isGoingSouth = searchStart < searchEnd;
 
-        // 1. Traer los viajes programados para ese día
+        // 1. Traer los viajes programados
         const { data: tripsData, error: tripsError } = await supabase
           .from("trips")
           .select("*")
@@ -119,16 +125,18 @@ export default function SearchResultsScreen() {
 
         if (tripsError) throw tripsError;
 
-        // 2. Filtrar viajes que cubran esta ruta 
+        // 2. Filtrar viajes que cubran esta ruta limpiando espacios
         const validTrips = (tripsData || []).filter((trip) => {
-          const tripStart = BONILLA_ROUTE.indexOf(trip.origin);
-          const tripEnd = BONILLA_ROUTE.indexOf(trip.destination);
+          const tOrigin = trip.origin?.trim();
+          const tDest = trip.destination?.trim();
+
+          const tripStart = BONILLA_ROUTE.indexOf(tOrigin);
+          const tripEnd = BONILLA_ROUTE.indexOf(tDest);
           
           if (tripStart === -1 || tripEnd === -1 || tripStart === tripEnd) return false;
           
           const tripGoesSouth = tripStart < tripEnd;
 
-          // El camión debe ir en la misma dirección que el cliente
           if (isGoingSouth !== tripGoesSouth) return false;
 
           if (isGoingSouth) {
@@ -143,30 +151,33 @@ export default function SearchResultsScreen() {
           return;
         }
 
-        // 3. Buscar el precio exacto en el Tarifario Global (Igual que en la Web)
-        const { data: priceData } = await supabase
+        // 3. Buscar tarifa dinámica
+        const { data: allPrices, error: pricesError } = await supabase
           .from("route_prices")
-          .select("*")
-          .or(`and(origin.eq.${origin},destination.eq.${destination}),and(origin.eq.${destination},destination.eq.${origin})`)
-          .single();
+          .select("*");
 
         let exactPrice = 0;
-        
-        if (priceData) {
-          if (is15Days === "true") exactPrice = priceData.price_15_days;
-          else if (isRoundTrip === "true") exactPrice = priceData.price_round_trip;
-          else exactPrice = priceData.price_one_way;
+        if (!pricesError && allPrices) {
+          const priceData = allPrices.find(p => 
+            (p.origin?.trim() === sOrigin && p.destination?.trim() === sDest) || 
+            (p.origin?.trim() === sDest && p.destination?.trim() === sOrigin)
+          );
+
+          if (priceData) {
+            if (is15Days === "true") exactPrice = Number(priceData.price_15_days);
+            else if (isRoundTrip === "true") exactPrice = Number(priceData.price_round_trip);
+            else exactPrice = Number(priceData.price_one_way);
+          }
         }
 
         const formattedTrips = validTrips.map(t => {
-            // Si por alguna razón no hay tarifa guardada, usamos un valor de fallback
-            const finalPrice = exactPrice > 0 ? exactPrice : t.price;
-            const segmentData = calculateSegmentData(t, origin, destination, finalPrice);
+          const finalPrice = exactPrice > 0 ? exactPrice : Number(t.price || 0);
+          const segmentData = calculateSegmentData(t, sOrigin, sDest, finalPrice);
           
           return {
             id: t.id,
-            origin: origin, 
-            destination: destination,
+            origin: sOrigin, 
+            destination: sDest,
             date: t.date,
             departureTime: segmentData.dep,
             arrivalTime: segmentData.arr,
@@ -183,7 +194,7 @@ export default function SearchResultsScreen() {
 
         const tripIds = formattedTrips.map((t) => t.id);
         
-        // 4. Checar la disponibilidad de asientos real en ese tramo
+        // 4. Checar la disponibilidad real
         const { data: bookingsData, error: bookingsError } = await supabase
           .from("bookings")
           .select("trip_id, status, seats, origin, destination")
@@ -199,10 +210,10 @@ export default function SearchResultsScreen() {
               .map((b: any) => ({
                 status: b.status,
                 seats: b.seats,
-                trip: { origin: b.origin, destination: b.destination }, // Importante: usar origin/dest de la reserva
+                trip: { origin: b.origin?.trim(), destination: b.destination?.trim() },
               }));
 
-            const occupiedSeats = getOccupiedSeatsForSegment(tripBookings, origin, destination);
+            const occupiedSeats = getOccupiedSeatsForSegment(tripBookings, sOrigin, sDest);
             return {
               ...trip,
               availableSeats: trip.totalSeats - occupiedSeats.length,
@@ -227,7 +238,6 @@ export default function SearchResultsScreen() {
     setPendingTrip(trip);
     setPendingSeats([]);
     
-    // --- Mandamos el estado hacia la selección de asientos ---
     router.push({
       pathname: "/seat-selection",
       params: { 

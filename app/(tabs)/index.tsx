@@ -33,56 +33,6 @@ const getLocalDateString = (date: Date) => {
 
 const TODAY = getLocalDateString(new Date());
 
-const ROUTE_OFFSETS: Record<string, number> = {
-  "Durango": 0,
-  "Nombre de Dios": 45,
-  "Vicente Guerrero": 75,
-  "Sombrerete": 135,
-  "San José de Fénix": 150,
-  "Sain Alto": 165,
-  "Río Florido": 180,
-  "Fresnillo": 240,
-  "Calera": 265,
-  "Zacatecas": 285,
-  "Aguascalientes": 405,
-  "San Juan de los Lagos": 480,
-  "Guadalajara": 600,
-};
-
-const calculateSegmentData = (baseDepartureTime: string, basePrice: number, origin: string, destination: string) => {
-  if (!baseDepartureTime) return { dep: "", arr: "", dur: "", price: basePrice };
-  
-  const [hours, minutes] = baseDepartureTime.split(":").map(Number);
-  const baseMinutes = hours * 60 + minutes;
-
-  const originOffset = ROUTE_OFFSETS[origin] || 0;
-  const destOffset = ROUTE_OFFSETS[destination] || 0;
-
-  const depTotal = baseMinutes + originOffset;
-  const arrTotal = baseMinutes + destOffset;
-
-  const formatTime = (totalMins: number) => {
-    const h = Math.floor(totalMins / 60) % 24;
-    const m = totalMins % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  };
-
-  const durationMins = destOffset - originOffset;
-  const durH = Math.floor(durationMins / 60);
-  const durM = durationMins % 60;
-  const durText = durM > 0 ? `${durH}h ${durM}m` : `${durH}h`;
-
-  const tripTotalMins = 600; 
-  const calculatedPrice = Math.round(((basePrice / tripTotalMins) * durationMins) / 10) * 10; 
-
-  return {
-    dep: formatTime(depTotal),
-    arr: formatTime(arrTotal),
-    dur: durText,
-    price: calculatedPrice || basePrice 
-  };
-};
-
 const ROUTE_IMAGES: Record<string, string> = {
   "Durango": "https://images.unsplash.com/photo-1620002093394-17f1a30ca5e3?auto=format&fit=crop&q=80&w=400",
   "Nombre de Dios": "https://images.unsplash.com/photo-1588614959060-4d144f28b207?auto=format&fit=crop&q=80&w=400",
@@ -103,7 +53,6 @@ export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user, isGuest, role } = useAuth();
-  const { setPendingTrip, setPendingSeats } = useBooking();
 
   const [origin, setOrigin] = useState("Durango");
   const [destination, setDestination] = useState("Guadalajara");
@@ -142,53 +91,14 @@ export default function HomeScreen() {
       const searchStart = BONILLA_ROUTE.indexOf(origin);
       const searchEnd = BONILLA_ROUTE.indexOf(destination);
 
-      if (searchStart === -1 || searchEnd === -1 || searchStart >= searchEnd) {
-        Alert.alert("Ruta no disponible", "Verifica que el destino vaya después del origen en la ruta seleccionada.");
+      // --- CORRECCIÓN AQUÍ ---
+      // Ahora solo bloqueamos si el origen y destino son iguales o si no existen.
+      // Ya no bloqueamos si el inicio es mayor al fin porque eso significa que es un viaje de REGRESO.
+      if (searchStart === -1 || searchEnd === -1 || searchStart === searchEnd) {
+        Alert.alert("Ruta no disponible", "Verifica que el origen y el destino sean ciudades diferentes.");
         setIsSearching(false);
         return;
       }
-
-      const { data, error } = await supabase
-        .from("trips")
-        .select("*")
-        .eq("date", formattedSearchDate);
-
-      if (error) throw error;
-
-      const validTrips = (data || []).filter((trip) => {
-        const tripStart = BONILLA_ROUTE.indexOf(trip.origin);
-        const tripEnd = BONILLA_ROUTE.indexOf(trip.destination);
-        return searchStart >= tripStart && searchEnd <= tripEnd;
-      });
-
-      const formattedTrips = validTrips.map(t => {
-        const segmentData = calculateSegmentData(t.departure_time, t.price, origin, destination);
-        
-        let finalPrice = segmentData.price;
-        if (is15Days && t.price_15_days) {
-          finalPrice = Number(t.price_15_days);
-        } else if (isRoundTrip && t.round_trip_prices && t.round_trip_prices[destination]) {
-          finalPrice = Number(t.round_trip_prices[destination]);
-        } else if (!isRoundTrip && !is15Days && t.prices && t.prices[destination]) {
-          finalPrice = Number(t.prices[destination]);
-        }
-
-        return {
-          id: t.id,
-          origin: origin, 
-          destination: destination, 
-          date: t.date,
-          departureTime: segmentData.dep,
-          arrivalTime: segmentData.arr,
-          duration: segmentData.dur,
-          price: finalPrice, 
-          availableSeats: t.available_seats,
-          totalSeats: t.total_seats,
-          busType: t.bus_type,
-          amenities: t.amenities,
-          occupiedSeats: t.occupied_seats || []
-        };
-      });
 
       router.push({
         pathname: "/search-results",
@@ -199,7 +109,6 @@ export default function HomeScreen() {
           isRoundTrip: isRoundTrip ? "true" : "false",
           is15Days: is15Days ? "true" : "false",
           returnDate: isRoundTrip ? formattedReturnDate : undefined,
-          results: JSON.stringify(formattedTrips) 
         },
       });
 

@@ -33,9 +33,9 @@ serve(async (req) => {
       purchase_description: safeTitle,
       custom_id: bookingId, // <--- EL TRUCO: Clip guardará este ID y nos lo devolverá en el webhook
       redirection_url: {
-        success: "https://bonillatours.com",
-        error: "https://bonillatours.com",
-        default: "https://bonillatours.com"
+        success: "https://bonillawww.vercel.app/",
+        error: "https://bonillawww.vercel.app/",
+        default: "https://bonillawww.vercel.app/"
       }
     };
 
