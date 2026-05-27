@@ -56,7 +56,6 @@ export default function CheckoutScreen() {
     return null;
   }
 
-  // --- LÓGICA DE PRECIOS ---
   let unitPrice = pendingTrip.price;
   
   if (is15Days === "true" && pendingTrip.price_15_days) {
@@ -84,7 +83,6 @@ export default function CheckoutScreen() {
     }
 
     try {
-      // 1. Confirmamos la reserva base (Boleto de Ida)
       const booking = await confirmBooking({
         trip: pendingTrip, 
         seats: pendingSeats,
@@ -98,33 +96,32 @@ export default function CheckoutScreen() {
         totalPrice,
       });
 
-      // 2. Lógica para el BOLETO DUPLICADO DE REGRESO
       let returnTripId = null;
 
       if ((isRoundTrip === "true" || is15Days === "true") && returnDate) {
-        // A. Buscar si ya existe el viaje de regreso en la fecha indicada a las 20:00 hrs
+        
+        // A. Buscar si ya existe el viaje de regreso 
         const { data: existingTrips } = await supabase
           .from('trips')
           .select('*')
           .eq('date', returnDate)
-          .eq('origin', pendingTrip.destination) // Invertimos origen y destino
-          .eq('destination', pendingTrip.origin)
-          .eq('departure_time', '20:00')
+          .eq('origin', pendingTrip.destination.trim())
+          .eq('destination', pendingTrip.origin.trim())
           .limit(1);
 
         if (existingTrips && existingTrips.length > 0) {
           returnTripId = existingTrips[0].id;
         } else {
-          // B. Si el viaje no existe, creamos el viaje de las 8pm a 6am
+          // B. Si el viaje no existe, creamos el viaje (TRUCO: Sumamos 2 horas a la BD)
           const { data: newTrip, error: tripError } = await supabase
             .from('trips')
             .insert({
-              origin: pendingTrip.destination,
-              destination: pendingTrip.origin,
+              origin: pendingTrip.destination.trim(),
+              destination: pendingTrip.origin.trim(),
               date: returnDate,
-              departure_time: '20:00',
-              arrival_time: '06:00',
-              price: pendingTrip.price,
+              departure_time: '22:00', // Mandamos las 22:00 (10 PM) para que se guarde a las 8 PM en Durango
+              arrival_time: '08:00',   // Mandamos las 08:00 (8 AM) para que se guarde a las 6 AM en Durango
+              price: pendingTrip.price || 0,
               available_seats: pendingTrip.totalSeats || 40,
               total_seats: pendingTrip.totalSeats || 40,
               bus_type: pendingTrip.busType || "Estándar",
@@ -138,7 +135,7 @@ export default function CheckoutScreen() {
           }
         }
 
-        // C. Duplicar el boleto (Reserva de regreso) asegurando los mismos asientos pero cobrando $0
+        // C. Duplicar el boleto a costo $0 con la ruta inversa
         if (returnTripId) {
           const returnBookingRef = "BT-R" + Math.floor(100000 + Math.random() * 900000).toString().slice(0, 5);
           
@@ -148,30 +145,28 @@ export default function CheckoutScreen() {
               booking_ref: returnBookingRef,
               trip_id: returnTripId,
               user_id: user?.id ?? null,
-              seats: pendingSeats, // Reservamos los mismos números de asiento
+              seats: pendingSeats,
               passenger_name: name,
               passenger_email: email,
               passenger_phone: phone,
               payment_method: paymentMethod,
               status: "pending", 
               is_guest: !user,
-              total_price: 0, // <--- CERO COSTO para no cobrar doble
-              origin: pendingTrip.destination,
-              destination: pendingTrip.origin,
+              total_price: 0, 
+              origin: pendingTrip.destination.trim(),
+              destination: pendingTrip.origin.trim(),
               is_round_trip: true,
               is_15_days: is15Days === "true"
             });
         }
       }
 
-      // 3. Actualizar la reserva original con los metadatos y ligar el ID del viaje de regreso
       await supabase.from('bookings').update({ 
         is_round_trip: isRoundTrip === "true",
         is_15_days: is15Days === "true",
         return_trip_id: returnTripId 
       }).eq('id', booking.id);
 
-      // 4. Procesamiento de Pago con Clip
       if (paymentMethod === "card") {
         const { data, error } = await supabase.functions.invoke('create-clip-payment', {
           body: {
@@ -188,14 +183,12 @@ export default function CheckoutScreen() {
         
         await WebBrowser.openBrowserAsync(data.payment_url);
         
-        // Verificamos si se confirmó tras cerrar el navegador
         const { data: checkBooking } = await supabase
           .from('bookings')
           .select('status, return_trip_id, passenger_email')
           .eq('id', booking.id)
           .single();
 
-        // Si Clip aprueba al instante, aseguramos que el duplicado también quede confirmado
         if (checkBooking?.status === "confirmed" && checkBooking?.return_trip_id) {
             await supabase.from('bookings')
               .update({ status: 'confirmed' })
@@ -208,7 +201,6 @@ export default function CheckoutScreen() {
         }
       }
       
-      // 5. Éxito: Pasamos los datos completos
       router.replace({
         pathname: "/booking-success",
         params: { 
@@ -368,7 +360,6 @@ export default function CheckoutScreen() {
   );
 }
 
-// Sub-componentes auxiliares
 function Section({ title, icon, children, colors }: { title: string; icon: any; children: React.ReactNode; colors: any; }) {
   return (
     <View style={[styles.section, { backgroundColor: colors.card, shadowColor: "#000" }]}>
