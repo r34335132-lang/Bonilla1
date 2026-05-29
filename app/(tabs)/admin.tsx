@@ -17,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context"; 
 import { AppButton } from "@/components/AppButton";
 import { useAuth } from "@/contexts/AuthContext";
 import { useColors } from "@/hooks/useColors";
@@ -90,6 +90,9 @@ export default function AdminScreen() {
     takeCommission: true,
     sellOrigin: "Durango",
     sellDest: "Guadalajara",
+    ticketType: "sencillo", // NUEVO: sencillo, redondo, 15_dias
+    openReturn: false,      // NUEVO
+    returnDate: "",         // NUEVO
   });
 
   // Estados Crear Viaje / Paquetería
@@ -170,14 +173,18 @@ export default function AdminScreen() {
   };
 
   // --- FUNCIONES AUXILIARES DE PRECIO DINAMICO ---
-  const getExactPrice = (origin: string, dest: string, fallback: number = 0) => {
+  const getExactPrice = (origin: string, dest: string, fallback: number = 0, tType: string = 'sencillo') => {
     if (!routePrices || routePrices.length === 0) return fallback;
     const route = routePrices.find(
       p =>
         (p.origin === origin && p.destination === dest) ||
         (p.origin === dest && p.destination === origin)
     );
-    return route && route.price_one_way ? Number(route.price_one_way) : fallback;
+    if (!route) return fallback;
+    
+    if (tType === 'redondo') return route.price_round_trip ? Number(route.price_round_trip) : fallback;
+    if (tType === '15_dias') return route.price_15_days ? Number(route.price_15_days) : fallback;
+    return route.price_one_way ? Number(route.price_one_way) : fallback;
   };
 
   const calculateDistancePrice = () => {
@@ -221,6 +228,9 @@ export default function AdminScreen() {
       takeCommission: true,
       sellOrigin: tripToSell.origin || "Durango",
       sellDest: tripToSell.destination || "Guadalajara",
+      ticketType: "sencillo",
+      openReturn: false,
+      returnDate: "",
     }));
     setPickerType(null);
     setSelectedTrip(null);
@@ -369,19 +379,26 @@ export default function AdminScreen() {
       return Alert.alert("Error", "El origen y el destino no pueden ser iguales.");
     }
 
+    const isRound = sellForm.ticketType === "redondo";
+    const is15 = sellForm.ticketType === "15_dias";
+
+    if ((isRound || is15) && !sellForm.openReturn && !sellForm.returnDate) {
+      return Alert.alert("Error", "Selecciona una fecha de regreso o marca 'Fecha Abierta'.");
+    }
+
     const baseTripPrice = isGlobal ? sellForm.tripPrice : sellTrip?.price;
-    const dynamicBasePrice = getExactPrice(sellOrigin, sellDest, Number(baseTripPrice) || 0);
+    const dynamicBasePrice = getExactPrice(sellOrigin, sellDest, Number(baseTripPrice) || 0, sellForm.ticketType);
 
     setIsSelling(true);
     try {
       const distInfo = calculateDistancePrice();
-      const exactNormalPrice = getExactPrice(sellOrigin, sellDest, dynamicBasePrice);
+      const exactNormalPrice = dynamicBasePrice;
 
       const finalPrice = sellForm.type === "distancia" ? distInfo.price : exactNormalPrice;
       const finalCommission = sellForm.takeCommission ? 100 : 0;
       const bookingRef = "BT-" + Math.floor(100000 + Math.random() * 900000).toString().slice(0, 6);
 
-      const { error } = await supabase.from("bookings").insert({
+      const { data: newBooking, error } = await supabase.from("bookings").insert({
         booking_ref: bookingRef,
         trip_id: tId,
         passenger_name: sellForm.name,
@@ -396,9 +413,80 @@ export default function AdminScreen() {
         seats: sellForm.seat ? [Number(sellForm.seat)] : [],
         commission_amount: finalCommission,
         is_distance_ticket: sellForm.type === "distancia",
-      });
+        is_round_trip: isRound,
+        is_15_days: is15,
+      }).select().single();
 
       if (error) throw error;
+
+      // LOGICA DE VIAJE DE REGRESO
+      let returnTripId = null;
+
+      if ((isRound || is15) && !sellForm.openReturn && sellForm.returnDate) {
+        const { data: existingTrips } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('date', sellForm.returnDate)
+          .eq('origin', sellDest)
+          .eq('destination', sellOrigin)
+          .limit(1);
+
+        if (existingTrips && existingTrips.length > 0) {
+          returnTripId = existingTrips[0].id;
+        } else {
+          const { data: newTrip, error: tripError } = await supabase
+            .from('trips')
+            .insert({
+              origin: sellDest,
+              destination: sellOrigin,
+              date: sellForm.returnDate,
+              departure_time: '22:00',
+              arrival_time: '08:00',
+              duration: "Automático Regreso",
+              price: Number(baseTripPrice) || 0,
+              available_seats: 40,
+              total_seats: 40,
+              bus_type: "Estándar",
+              amenities: []
+            })
+            .select('id')
+            .single();
+
+          if (!tripError && newTrip) {
+            returnTripId = newTrip.id;
+          }
+        }
+
+        if (returnTripId) {
+          const returnBookingRef = "BT-R" + Math.floor(100000 + Math.random() * 900000).toString().slice(0, 5);
+          
+          await supabase
+            .from('bookings')
+            .insert({
+              booking_ref: returnBookingRef,
+              trip_id: returnTripId,
+              user_id: null,
+              seats: sellForm.seat ? [Number(sellForm.seat)] : [],
+              passenger_name: sellForm.name,
+              passenger_email: 'venta_rapida@bonillatours.com',
+              passenger_phone: "0000000000",
+              payment_method: "cash",
+              status: "boarded", 
+              is_guest: true,
+              total_price: 0, // Se cobra todo en la ida
+              origin: sellDest,
+              destination: sellOrigin,
+              is_round_trip: isRound,
+              is_15_days: is15,
+            });
+        }
+      }
+
+      if (returnTripId && newBooking) {
+        await supabase.from('bookings').update({ 
+          return_trip_id: returnTripId 
+        }).eq('id', newBooking.id);
+      }
 
       Alert.alert("¡Venta Exitosa!", `Se vendió boleto a ${sellForm.name} por $${finalPrice}.\nComisión retenida: $${finalCommission}`);
 
@@ -420,6 +508,9 @@ export default function AdminScreen() {
         takeCommission: true,
         sellOrigin: "Durango",
         sellDest: "Guadalajara",
+        ticketType: "sencillo",
+        openReturn: false,
+        returnDate: "",
       });
     } catch (err: any) {
       Alert.alert("Error de Venta", err.message);
@@ -510,7 +601,7 @@ export default function AdminScreen() {
   const renderSellModalContent = (isGlobal: boolean) => {
     const distInfo = calculateDistancePrice();
     const baseTripPrice = isGlobal ? sellForm.tripPrice : sellTrip?.price;
-    const exactNormalPrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, Number(baseTripPrice) || 0);
+    const exactNormalPrice = getExactPrice(sellForm.sellOrigin, sellForm.sellDest, Number(baseTripPrice) || 0, sellForm.ticketType);
 
     if (["sellTrip", "sellOrigin", "sellDest"].includes(pickerType || "")) {
       return (
@@ -563,7 +654,7 @@ export default function AdminScreen() {
     }
 
     return (
-      <View>
+      <ScrollView showsVerticalScrollIndicator={false}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 16 }}>
           <Text style={{ fontSize: 20, fontWeight: "800" }}>{isGlobal ? "Taquilla Rápida" : "Venta Local"}</Text>
           <TouchableOpacity onPress={() => { isGlobal ? closeGlobalSellModal() : closeLocalSellModal(); }}><Feather name="x" size={24} color="#666" /></TouchableOpacity>
@@ -608,8 +699,44 @@ export default function AdminScreen() {
             </View>
           </View>
 
+          <View style={{ marginBottom: 4 }}>
+            <Text style={styles.labelModal}>{isGlobal ? "4." : ""} Tipo de Viaje</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "sencillo" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "sencillo" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "sencillo" ? "#0369a1" : "#94a3b8" }}>Sencillo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "redondo" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "redondo" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "redondo" ? "#0369a1" : "#94a3b8" }}>Redondo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "15_dias" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "15_dias" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "15_dias" ? "#0369a1" : "#94a3b8" }}>15 Días</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {(sellForm.ticketType === 'redondo' || sellForm.ticketType === '15_dias') && (
+            <View style={{ backgroundColor: "#f8fafc", padding: 12, borderRadius: 12, marginBottom: 4 }}>
+              <Text style={styles.labelModal}>Opciones de Regreso</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, color: "#475569", fontWeight: "600" }}>Dejar Fecha Abierta</Text>
+                <Switch value={sellForm.openReturn} onValueChange={v => setSellForm({ ...sellForm, openReturn: v })} trackColor={{ true: colors.primary }} />
+              </View>
+              {!sellForm.openReturn && (
+                <View>
+                  <Text style={[styles.labelModal, { color: "#64748b" }]}>Fecha de Regreso (YYYY-MM-DD)</Text>
+                  <TextInput 
+                    style={[styles.inputModal, { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e8f0" }]} 
+                    value={sellForm.returnDate} 
+                    onChangeText={t => setSellForm({ ...sellForm, returnDate: t })} 
+                    placeholder="Ej. 2026-12-30" 
+                  />
+                </View>
+              )}
+            </View>
+          )}
+
           <View>
-            <Text style={styles.labelModal}>{isGlobal ? "4." : ""} Tipo de Cobro</Text>
+            <Text style={styles.labelModal}>{isGlobal ? "5." : ""} Tipo de Cobro</Text>
             <View style={{ flexDirection: "row", gap: 12 }}>
               <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.type === "normal" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, type: "normal" })}>
                 <Text style={{ fontWeight: "700", color: sellForm.type === "normal" ? "#0369a1" : "#94a3b8" }}>Normal (${exactNormalPrice})</Text>
@@ -640,7 +767,7 @@ export default function AdminScreen() {
             {isSelling ? <ActivityIndicator color="#fff" /> : <Text style={{ color: "#fff", fontWeight: "800", fontSize: 16 }}>Finalizar Venta e Ingresar</Text>}
           </TouchableOpacity>
         </View>
-      </View>
+      </ScrollView>
     );
   };
 
@@ -753,7 +880,7 @@ export default function AdminScreen() {
             </View>
           )}
 
-          {/* NUEVO: CONTROLES DE FILTRO POR FECHA */}
+          {/* CONTROLES DE FILTRO POR FECHA */}
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12, marginTop: 8 }}>
             <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Viajes Programados</Text>
             <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.muted, borderRadius: 8, paddingHorizontal: 12 }}>

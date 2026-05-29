@@ -57,8 +57,8 @@ export default function PaqueteriaScreen() {
     const dOffset = ROUTE_OFFSETS[destination] || 0;
     const durationMins = Math.abs(dOffset - oOffset);
     
-    // Formula: $100 base + $15 por cada 30 minutos de distancia
-    const calculatedPrice = Math.max(100, Math.round(durationMins / 30) * 15);
+    // Formula: Inicia en $300 base (o ajustado por distancia)
+    const calculatedPrice = Math.max(300, Math.round(durationMins / 30) * 15);
     return calculatedPrice;
   };
 
@@ -102,6 +102,7 @@ export default function PaqueteriaScreen() {
 
     setIsLoading(true);
     try {
+      // Nota: is_paid será false por defecto en la BD, se pagará en taquilla
       const { error } = await supabase.from('parcels').insert({
         sender_name: senderName.trim(),
         receiver_name: receiverName.trim(),
@@ -207,9 +208,14 @@ export default function PaqueteriaScreen() {
                   <Text style={{ color: colors.mutedForeground, fontSize: 13, marginTop: 4 }}>Para: {p.receiver_name}</Text>
                 </View>
                 <View style={{ justifyContent: 'center', alignItems: 'flex-end' }}>
-                  <Text style={{ color: colors.foreground, fontWeight: '900', fontSize: 18 }}>${p.price}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 4 }}>
-                    {p.status === 'pending' ? 'Por pagar' : 'En tránsito'}
+                  <Text style={{ color: colors.foreground, fontWeight: '900', fontSize: 18 }}>
+                    ${p.price} <Text style={{fontSize: 10, fontWeight: 'normal'}}>(Final)</Text>
+                  </Text>
+                  <Text style={{ color: p.is_paid ? '#10B981' : '#EF4444', fontSize: 13, marginTop: 4, fontWeight: '800' }}>
+                    {p.is_paid ? '✅ PAGADO' : '❌ POR PAGAR'}
+                  </Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: 2, textTransform: 'uppercase' }}>
+                    {p.status === 'pending' ? 'En Taquilla/Bodega' : p.status === 'en_transito' ? 'En ruta' : 'Llegó a destino'}
                   </Text>
                 </View>
               </View>
