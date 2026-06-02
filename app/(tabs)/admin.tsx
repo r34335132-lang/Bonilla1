@@ -24,6 +24,7 @@ import { useColors } from "@/hooks/useColors";
 import { supabase } from "@/lib/supabase";
 import { BONILLA_ROUTE } from "@/utils/routeLogic";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 // --- TABLA DE DISTANCIAS APROXIMADAS (EN KM) ---
 const DISTANCES_KM: Record<string, number> = {
@@ -61,10 +62,13 @@ export default function AdminScreen() {
   const [routePrices, setRoutePrices] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // --- NUEVO: ESTADO PARA FILTRO DE FECHA ---
+  // --- ESTADOS PARA FILTROS Y CALENDARIOS ---
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split("T")[0]
   );
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showReturnDatePicker, setShowReturnDatePicker] = useState(false);
+  const [showCreateTripDatePicker, setShowCreateTripDatePicker] = useState(false);
 
   // Estados Escáner QR
   const [permission, requestPermission] = useCameraPermissions();
@@ -90,9 +94,9 @@ export default function AdminScreen() {
     takeCommission: true,
     sellOrigin: "Durango",
     sellDest: "Guadalajara",
-    ticketType: "sencillo", // NUEVO: sencillo, redondo, 15_dias
-    openReturn: false,      // NUEVO
-    returnDate: "",         // NUEVO
+    ticketType: "sencillo",
+    openReturn: false,
+    returnDate: "",
   });
 
   // Estados Crear Viaje / Paquetería
@@ -172,7 +176,7 @@ export default function AdminScreen() {
     }
   };
 
-  // --- FUNCIONES AUXILIARES DE PRECIO DINAMICO ---
+  // --- FUNCIONES AUXILIARES ---
   const getExactPrice = (origin: string, dest: string, fallback: number = 0, tType: string = 'sencillo') => {
     if (!routePrices || routePrices.length === 0) return fallback;
     const route = routePrices.find(
@@ -195,21 +199,61 @@ export default function AdminScreen() {
     return { km: totalKm, price: price > 0 ? price : 50 };
   };
 
+  // Utilidad para parsear fechas de forma segura y evitar crashes
+  const getValidDate = (dateString: string) => {
+    if (!dateString) return new Date();
+    const d = new Date(dateString + "T12:00:00");
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
+
   // --- FILTRO DE VIAJES POR FECHA (USANDO useMemo) ---
   const filteredTrips = useMemo(() => {
     if (!selectedDate) return tripsList;
     return tripsList.filter(trip => trip.date === selectedDate);
   }, [tripsList, selectedDate]);
 
+  // Manejadores de los Selectores de Fecha
+  const handleDateChange = (event: any, date?: Date) => {
+    if (Platform.OS === "android") setShowDatePicker(false);
+    if (date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      setSelectedDate(`${year}-${month}-${day}`);
+    }
+  };
+
+  const handleReturnDateChange = (event: any, date?: Date) => {
+    if (Platform.OS === "android") setShowReturnDatePicker(false);
+    if (date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      setSellForm(prev => ({ ...prev, returnDate: `${year}-${month}-${day}` }));
+    }
+  };
+
+  const handleCreateTripDateChange = (event: any, date?: Date) => {
+    if (Platform.OS === "android") setShowCreateTripDatePicker(false);
+    if (date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      setTripForm(prev => ({ ...prev, date: `${year}-${month}-${day}` }));
+    }
+  };
+
   const closeGlobalSellModal = () => {
     setShowGlobalSellModal(false);
     setPickerType(null);
+    setShowReturnDatePicker(false);
   };
 
   const closeLocalSellModal = () => {
     setShowSellModal(false);
     setSellTrip(null);
     setPickerType(null);
+    setShowReturnDatePicker(false);
   };
 
   const openLocalSellModal = () => {
@@ -234,6 +278,7 @@ export default function AdminScreen() {
     }));
     setPickerType(null);
     setSelectedTrip(null);
+    setShowReturnDatePicker(false);
 
     setTimeout(() => {
       setShowSellModal(true);
@@ -607,27 +652,31 @@ export default function AdminScreen() {
       return (
         <View style={{ height: 450 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 16 }}>
-            <Text style={{ fontSize: 18, fontWeight: "800" }}>{pickerType === "sellTrip" ? "Seleccionar Viaje" : "Selecciona Parada"}</Text>
-            <TouchableOpacity onPress={() => setPickerType(null)}><Feather name="x" size={24} color="#666" /></TouchableOpacity>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: colors.foreground }}>
+              {pickerType === "sellTrip" ? "Seleccionar Viaje" : "Selecciona Parada"}
+            </Text>
+            <TouchableOpacity onPress={() => setPickerType(null)}>
+              <Feather name="x" size={24} color={colors.foreground} />
+            </TouchableOpacity>
           </View>
           <FlatList
             data={pickerType === "sellTrip" ? tripsList : BONILLA_ROUTE}
             keyExtractor={item => (pickerType === "sellTrip" ? item.id : item)}
-            ListEmptyComponent={<Text style={{ textAlign: "center", marginTop: 20, color: "#666" }}>Aún no hay viajes programados.</Text>}
+            ListEmptyComponent={<Text style={{ textAlign: "center", marginTop: 20, color: colors.mutedForeground }}>Aún no hay viajes programados.</Text>}
             renderItem={({ item }) => {
               if (pickerType === "sellTrip") {
                 const isSel = item.id === sellForm.tripId;
                 return (
                   <TouchableOpacity
-                    style={[styles.cityOption, isSel && { backgroundColor: colors.secondary }]}
+                    style={[styles.cityOption, { borderBottomColor: colors.border }, isSel && { backgroundColor: colors.secondary }]}
                     onPress={() => {
                       setSellForm({ ...sellForm, tripId: item.id, tripLabel: `${item.departure_time} - ${item.origin} a ${item.destination}`, tripPrice: item.price, sellOrigin: item.origin, sellDest: item.destination });
                       setPickerType(null);
                     }}
                   >
                     <View>
-                      <Text style={{ fontWeight: "800", fontSize: 16 }}>{item.departure_time} hrs • {item.date}</Text>
-                      <Text style={{ fontSize: 13, color: "#666" }}>{item.origin} a {item.destination}</Text>
+                      <Text style={{ fontWeight: "800", fontSize: 16, color: colors.foreground }}>{item.departure_time} hrs • {item.date}</Text>
+                      <Text style={{ fontSize: 13, color: colors.mutedForeground }}>{item.origin} a {item.destination}</Text>
                     </View>
                     {isSel && <Feather name="check" size={20} color={colors.primary} />}
                   </TouchableOpacity>
@@ -636,14 +685,14 @@ export default function AdminScreen() {
               const isSel = (pickerType === "sellOrigin" && item === sellForm.sellOrigin) || (pickerType === "sellDest" && item === sellForm.sellDest);
               return (
                 <TouchableOpacity
-                  style={[styles.cityOption, isSel && { backgroundColor: colors.secondary }]}
+                  style={[styles.cityOption, { borderBottomColor: colors.border }, isSel && { backgroundColor: colors.secondary }]}
                   onPress={() => {
                     if (pickerType === "sellOrigin") setSellForm({ ...sellForm, sellOrigin: item });
                     if (pickerType === "sellDest") setSellForm({ ...sellForm, sellDest: item });
                     setPickerType(null);
                   }}
                 >
-                  <Text style={{ fontSize: 16, fontWeight: "600", color: isSel ? colors.primary : "#000" }}>{item}</Text>
+                  <Text style={{ fontSize: 16, fontWeight: "600", color: isSel ? colors.primary : colors.foreground }}>{item}</Text>
                   {isSel && <Feather name="check" size={20} color={colors.primary} />}
                 </TouchableOpacity>
               );
@@ -656,111 +705,152 @@ export default function AdminScreen() {
     return (
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 16 }}>
-          <Text style={{ fontSize: 20, fontWeight: "800" }}>{isGlobal ? "Taquilla Rápida" : "Venta Local"}</Text>
-          <TouchableOpacity onPress={() => { isGlobal ? closeGlobalSellModal() : closeLocalSellModal(); }}><Feather name="x" size={24} color="#666" /></TouchableOpacity>
+          <Text style={{ fontSize: 20, fontWeight: "800", color: colors.foreground }}>
+            {isGlobal ? "Taquilla Rápida" : "Venta Local"}
+          </Text>
+          <TouchableOpacity onPress={() => { isGlobal ? closeGlobalSellModal() : closeLocalSellModal(); }}>
+            <Feather name="x" size={24} color={colors.foreground} />
+          </TouchableOpacity>
         </View>
 
         <View style={{ gap: 12 }}>
           {isGlobal && (
             <View>
-              <Text style={styles.labelModal}>1. Seleccionar Autobús/Viaje</Text>
-              <TouchableOpacity style={[styles.inputModal, { justifyContent: "center", borderWidth: 1, borderColor: "#cbd5e1" }]} onPress={() => setPickerType("sellTrip")}>
-                <Text style={{ fontWeight: sellForm.tripLabel ? "700" : "500", color: sellForm.tripLabel ? "#0f172a" : "#94a3b8" }}>{sellForm.tripLabel || "Toca para elegir de la lista..."}</Text>
+              <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>1. Seleccionar Autobús/Viaje</Text>
+              <TouchableOpacity style={[styles.inputModal, { justifyContent: "center", borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background }]} onPress={() => setPickerType("sellTrip")}>
+                <Text style={{ fontWeight: sellForm.tripLabel ? "700" : "500", color: sellForm.tripLabel ? colors.foreground : colors.mutedForeground }}>
+                  {sellForm.tripLabel || "Toca para elegir de la lista..."}
+                </Text>
               </TouchableOpacity>
             </View>
           )}
 
           <View style={{ flexDirection: "row", gap: 12 }}>
             <View style={{ flex: 2 }}>
-              <Text style={styles.labelModal}>{isGlobal ? "2." : ""} Pasajero</Text>
-              <TextInput style={styles.inputModal} value={sellForm.name} onChangeText={t => setSellForm({ ...sellForm, name: t })} placeholder="Ej. Juan Pérez" />
+              <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>{isGlobal ? "2." : ""} Pasajero</Text>
+              <TextInput 
+                style={[styles.inputModal, { backgroundColor: colors.background, color: colors.foreground, borderWidth: 1, borderColor: colors.border }]} 
+                value={sellForm.name} 
+                onChangeText={t => setSellForm({ ...sellForm, name: t })} 
+                placeholder="Ej. Juan Pérez" 
+                placeholderTextColor={colors.mutedForeground} 
+              />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.labelModal}>Asiento</Text>
-              <TextInput style={styles.inputModal} value={sellForm.seat} onChangeText={t => setSellForm({ ...sellForm, seat: t })} keyboardType="numeric" placeholder="#" />
+              <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>Asiento</Text>
+              <TextInput 
+                style={[styles.inputModal, { backgroundColor: colors.background, color: colors.foreground, borderWidth: 1, borderColor: colors.border }]} 
+                value={sellForm.seat} 
+                onChangeText={t => setSellForm({ ...sellForm, seat: t })} 
+                keyboardType="numeric" 
+                placeholder="#" 
+                placeholderTextColor={colors.mutedForeground} 
+              />
             </View>
           </View>
 
           <View>
-            <Text style={styles.labelModal}>{isGlobal ? "3." : ""} Ruta del Pasajero</Text>
+            <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>{isGlobal ? "3." : ""} Ruta del Pasajero</Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.labelModal, { fontSize: 9 }]}>Sube en:</Text>
-                <TouchableOpacity style={[styles.inputModal, { height: 40, justifyContent: "center" }]} onPress={() => setPickerType("sellOrigin")}>
-                  <Text style={{ fontSize: 12, fontWeight: "600" }}>{sellForm.sellOrigin}</Text>
+                <Text style={[styles.labelModal, { fontSize: 9, color: colors.mutedForeground }]}>Sube en:</Text>
+                <TouchableOpacity style={[styles.inputModal, { height: 40, justifyContent: "center", backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setPickerType("sellOrigin")}>
+                  <Text style={{ fontSize: 12, fontWeight: "600", color: colors.foreground }}>{sellForm.sellOrigin}</Text>
                 </TouchableOpacity>
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.labelModal, { fontSize: 9 }]}>Baja en:</Text>
-                <TouchableOpacity style={[styles.inputModal, { height: 40, justifyContent: "center" }]} onPress={() => setPickerType("sellDest")}>
-                  <Text style={{ fontSize: 12, fontWeight: "600" }}>{sellForm.sellDest}</Text>
+                <Text style={[styles.labelModal, { fontSize: 9, color: colors.mutedForeground }]}>Baja en:</Text>
+                <TouchableOpacity style={[styles.inputModal, { height: 40, justifyContent: "center", backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setPickerType("sellDest")}>
+                  <Text style={{ fontSize: 12, fontWeight: "600", color: colors.foreground }}>{sellForm.sellDest}</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </View>
 
           <View style={{ marginBottom: 4 }}>
-            <Text style={styles.labelModal}>{isGlobal ? "4." : ""} Tipo de Viaje</Text>
+            <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>{isGlobal ? "4." : ""} Tipo de Viaje</Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "sencillo" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "sencillo" })}>
-                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "sencillo" ? "#0369a1" : "#94a3b8" }}>Sencillo</Text>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "sencillo" ? colors.primary + "20" : colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setSellForm({ ...sellForm, ticketType: "sencillo" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "sencillo" ? colors.primary : colors.mutedForeground }}>Sencillo</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "redondo" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "redondo" })}>
-                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "redondo" ? "#0369a1" : "#94a3b8" }}>Redondo</Text>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "redondo" ? colors.primary + "20" : colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setSellForm({ ...sellForm, ticketType: "redondo" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "redondo" ? colors.primary : colors.mutedForeground }}>Redondo</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "15_dias" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, ticketType: "15_dias" })}>
-                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "15_dias" ? "#0369a1" : "#94a3b8" }}>15 Días</Text>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.ticketType === "15_dias" ? colors.primary + "20" : colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setSellForm({ ...sellForm, ticketType: "15_dias" })}>
+                <Text style={{ fontWeight: "700", fontSize: 11, color: sellForm.ticketType === "15_dias" ? colors.primary : colors.mutedForeground }}>15 Días</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {(sellForm.ticketType === 'redondo' || sellForm.ticketType === '15_dias') && (
-            <View style={{ backgroundColor: "#f8fafc", padding: 12, borderRadius: 12, marginBottom: 4 }}>
-              <Text style={styles.labelModal}>Opciones de Regreso</Text>
+            <View style={{ backgroundColor: colors.muted, padding: 12, borderRadius: 12, marginBottom: 4 }}>
+              <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>Opciones de Regreso</Text>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <Text style={{ fontSize: 12, color: "#475569", fontWeight: "600" }}>Dejar Fecha Abierta</Text>
+                <Text style={{ fontSize: 12, color: colors.foreground, fontWeight: "600" }}>Dejar Fecha Abierta</Text>
                 <Switch value={sellForm.openReturn} onValueChange={v => setSellForm({ ...sellForm, openReturn: v })} trackColor={{ true: colors.primary }} />
               </View>
+              
               {!sellForm.openReturn && (
                 <View>
-                  <Text style={[styles.labelModal, { color: "#64748b" }]}>Fecha de Regreso (YYYY-MM-DD)</Text>
-                  <TextInput 
-                    style={[styles.inputModal, { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e8f0" }]} 
-                    value={sellForm.returnDate} 
-                    onChangeText={t => setSellForm({ ...sellForm, returnDate: t })} 
-                    placeholder="Ej. 2026-12-30" 
-                  />
+                  <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>Fecha de Regreso (YYYY-MM-DD)</Text>
+                  <TouchableOpacity 
+                    style={[styles.inputModal, { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, justifyContent: 'center' }]} 
+                    onPress={() => setShowReturnDatePicker(true)}
+                  >
+                    <Text style={{ color: sellForm.returnDate ? colors.foreground : colors.mutedForeground, fontWeight: "500" }}>
+                      {sellForm.returnDate || "Toca para elegir fecha..."}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* CALENDARIO DE REGRESO SEGURO MODO OSCURO */}
+                  {showReturnDatePicker && (
+                    <View style={{ backgroundColor: colors.card, borderRadius: 12, marginTop: 8, padding: 8, borderWidth: 1, borderColor: colors.border }}>
+                      {Platform.OS === 'ios' && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                          <TouchableOpacity onPress={() => setShowReturnDatePicker(false)}>
+                            <Text style={{ color: colors.primary, fontWeight: 'bold', paddingVertical: 8, paddingHorizontal: 12 }}>Cerrar</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      <DateTimePicker
+                        value={getValidDate(sellForm.returnDate)}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                        onChange={handleReturnDateChange}
+                      />
+                    </View>
+                  )}
                 </View>
               )}
             </View>
           )}
 
           <View>
-            <Text style={styles.labelModal}>{isGlobal ? "5." : ""} Tipo de Cobro</Text>
+            <Text style={[styles.labelModal, { color: colors.mutedForeground }]}>{isGlobal ? "5." : ""} Tipo de Cobro</Text>
             <View style={{ flexDirection: "row", gap: 12 }}>
-              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.type === "normal" ? "#f0f9ff" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, type: "normal" })}>
-                <Text style={{ fontWeight: "700", color: sellForm.type === "normal" ? "#0369a1" : "#94a3b8" }}>Normal (${exactNormalPrice})</Text>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.type === "normal" ? colors.primary + "20" : colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setSellForm({ ...sellForm, type: "normal" })}>
+                <Text style={{ fontWeight: "700", color: sellForm.type === "normal" ? colors.primary : colors.mutedForeground }}>Normal (${exactNormalPrice})</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.type === "distancia" ? "#fff7ed" : "#f8fafc" }]} onPress={() => setSellForm({ ...sellForm, type: "distancia" })}>
-                <Text style={{ fontWeight: "700", color: sellForm.type === "distancia" ? "#c2410c" : "#94a3b8" }}>Por Distancia</Text>
+              <TouchableOpacity style={[styles.inputModal, { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: sellForm.type === "distancia" ? "#ea580c20" : colors.background, borderWidth: 1, borderColor: colors.border }]} onPress={() => setSellForm({ ...sellForm, type: "distancia" })}>
+                <Text style={{ fontWeight: "700", color: sellForm.type === "distancia" ? "#ea580c" : colors.mutedForeground }}>Por Distancia</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {sellForm.type === "distancia" && (
-            <View style={{ backgroundColor: "#fff7ed", padding: 8, borderRadius: 12, borderWidth: 1, borderColor: "#ffedd5", marginTop: 4 }}>
+            <View style={{ backgroundColor: "#ea580c20", padding: 8, borderRadius: 12, borderWidth: 1, borderColor: "#ea580c50", marginTop: 4 }}>
               <Text style={{ fontSize: 13, fontWeight: "800", textAlign: "center", color: "#ea580c" }}>
                 {distInfo.km} Km recorridos = Cobrar ${distInfo.price} MXN
               </Text>
             </View>
           )}
 
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#f8fafc", padding: 12, borderRadius: 12, marginTop: 4 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.muted, padding: 12, borderRadius: 12, marginTop: 4 }}>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontWeight: "700", color: "#0f172a" }}>Retener Comisión ($100)</Text>
-              <Text style={{ fontSize: 11, color: "#64748b" }}>Ganancia directa del supervisor.</Text>
+              <Text style={{ fontWeight: "700", color: colors.foreground }}>Retener Comisión ($100)</Text>
+              <Text style={{ fontSize: 11, color: colors.mutedForeground }}>Ganancia directa del supervisor.</Text>
             </View>
-            <Switch value={sellForm.takeCommission} onValueChange={v => setSellForm({ ...sellForm, takeCommission: v })} trackColor={{ false: "#cbd5e1", true: colors.primary }} />
+            <Switch value={sellForm.takeCommission} onValueChange={v => setSellForm({ ...sellForm, takeCommission: v })} trackColor={{ false: colors.border, true: colors.primary }} />
           </View>
 
           <TouchableOpacity style={{ backgroundColor: "#10b981", padding: 16, borderRadius: 12, alignItems: "center", marginTop: 8 }} onPress={() => executeSell(isGlobal)} disabled={isSelling || (isGlobal && !sellForm.tripId)}>
@@ -864,9 +954,42 @@ export default function AdminScreen() {
               </View>
               <View style={styles.form}>
                 <View style={styles.row}>
-                  <View style={styles.inputWrap}><Text style={[styles.label, { color: colors.foreground }]}>Fecha (YYYY-MM-DD)</Text><TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={tripForm.date} onChangeText={(v) => setTripForm({ ...tripForm, date: v })} placeholder="Ej. 2026-12-25" placeholderTextColor={colors.mutedForeground} /></View>
+                  
+                  {/* SELECTOR DE FECHA PARA CREAR VIAJE */}
+                  <View style={styles.inputWrap}>
+                    <Text style={[styles.label, { color: colors.foreground }]}>Fecha (YYYY-MM-DD)</Text>
+                    <TouchableOpacity 
+                      style={[styles.input, { backgroundColor: colors.muted, justifyContent: 'center' }]}
+                      onPress={() => setShowCreateTripDatePicker(true)}
+                    >
+                      <Text style={{ color: tripForm.date ? colors.foreground : colors.mutedForeground, fontWeight: '500' }}>
+                        {tripForm.date || "Ej. 2026-12-25"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
                   <View style={styles.inputWrap}><Text style={[styles.label, { color: colors.foreground }]}>Hora Salida</Text><TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={tripForm.departure_time} onChangeText={(v) => setTripForm({ ...tripForm, departure_time: v })} placeholder="Ej. 20:00" placeholderTextColor={colors.mutedForeground} /></View>
                 </View>
+
+                {/* CALENDARIO DE CREAR VIAJE SEGURO */}
+                {showCreateTripDatePicker && (
+                  <View style={{ backgroundColor: colors.card, borderRadius: 12, padding: 8, marginTop: 4, borderWidth: 1, borderColor: colors.border }}>
+                    {Platform.OS === 'ios' && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                        <TouchableOpacity onPress={() => setShowCreateTripDatePicker(false)}>
+                          <Text style={{ color: colors.primary, fontWeight: 'bold', paddingVertical: 8, paddingHorizontal: 12 }}>Cerrar</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <DateTimePicker
+                      value={getValidDate(tripForm.date)}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                      onChange={handleCreateTripDateChange}
+                    />
+                  </View>
+                )}
+
                 <View style={styles.row}>
                   <View style={styles.inputWrap}><Text style={[styles.label, { color: colors.foreground }]}>Hora Llegada</Text><TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={tripForm.arrival_time} onChangeText={(v) => setTripForm({ ...tripForm, arrival_time: v })} placeholder="Ej. 06:00" placeholderTextColor={colors.mutedForeground} /></View>
                   <View style={styles.inputWrap}><Text style={[styles.label, { color: colors.foreground }]}>Asientos</Text><TextInput style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground }]} value={tripForm.total_seats} onChangeText={(v) => setTripForm({ ...tripForm, total_seats: v })} keyboardType="numeric" /></View>
@@ -880,20 +1003,39 @@ export default function AdminScreen() {
             </View>
           )}
 
-          {/* CONTROLES DE FILTRO POR FECHA */}
+          {/* CONTROLES DE FILTRO POR FECHA FUERA DE LA FILA ROW */}
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12, marginTop: 8 }}>
             <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Viajes Programados</Text>
-            <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.muted, borderRadius: 8, paddingHorizontal: 12 }}>
+            
+            <TouchableOpacity 
+              style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.muted, borderRadius: 8, paddingHorizontal: 12, height: 40 }}
+              onPress={() => setShowDatePicker(true)}
+            >
               <Feather name="calendar" size={16} color={colors.foreground} />
-              <TextInput
-                style={{ height: 40, width: 100, marginLeft: 8, color: colors.foreground, fontWeight: "600" }}
-                value={selectedDate}
-                onChangeText={setSelectedDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.mutedForeground}
+              <Text style={{ marginLeft: 8, color: colors.foreground, fontWeight: "600" }}>
+                {selectedDate}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* CALENDARIO DE FILTRO SEGURO */}
+          {showDatePicker && (
+            <View style={{ backgroundColor: colors.card, borderRadius: 12, padding: 8, marginBottom: 16 }}>
+              {Platform.OS === 'ios' && (
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                    <Text style={{ color: colors.primary, fontWeight: 'bold', paddingVertical: 8, paddingHorizontal: 12 }}>Cerrar</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              <DateTimePicker
+                value={getValidDate(selectedDate)}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                onChange={handleDateChange}
               />
             </View>
-          </View>
+          )}
 
           {loading ? <ActivityIndicator color={colors.primary} /> : (
             filteredTrips.length === 0 ? (
@@ -1080,7 +1222,7 @@ export default function AdminScreen() {
       <Modal visible={showGlobalSellModal} transparent animationType="fade" onRequestClose={closeGlobalSellModal}>
         <View style={styles.sellModalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <View style={styles.sellModalContent}>
+            <View style={[styles.sellModalContent, { backgroundColor: colors.card }]}>
               {renderSellModalContent(true)}
             </View>
           </KeyboardAvoidingView>
@@ -1091,7 +1233,7 @@ export default function AdminScreen() {
       <Modal visible={showSellModal} transparent animationType="fade" onRequestClose={closeLocalSellModal}>
         <View style={styles.sellModalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <View style={styles.sellModalContent}>
+            <View style={[styles.sellModalContent, { backgroundColor: colors.card }]}>
               {renderSellModalContent(false)}
             </View>
           </KeyboardAvoidingView>
@@ -1159,7 +1301,7 @@ const styles = StyleSheet.create({
   form: { gap: 16 },
   row: { flexDirection: "row", gap: 12 },
   inputWrap: { flex: 1, gap: 6 },
-  label: { fontSize: 12, fontWeight: "700", marginLeft: 4, textTransform: "uppercase", color: "#64748b" },
+  label: { fontSize: 12, fontWeight: "700", marginLeft: 4, textTransform: "uppercase" },
   input: { height: 50, borderRadius: 12, paddingHorizontal: 16, fontSize: 15, fontWeight: "500" },
   createBtn: { padding: 16, borderRadius: 12, alignItems: "center", marginTop: 8 },
   createBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
@@ -1192,7 +1334,7 @@ const styles = StyleSheet.create({
   sellBtn: { backgroundColor: "#10b981", padding: 12, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   sellBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
   sellModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 16 },
-  sellModalContent: { backgroundColor: "#fff", borderRadius: 24, padding: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10 },
-  inputModal: { backgroundColor: "#f1f5f9", height: 48, borderRadius: 12, paddingHorizontal: 16, fontSize: 14, fontWeight: "500", borderBottomWidth: 0 },
-  labelModal: { fontSize: 11, fontWeight: "800", marginLeft: 4, marginBottom: 4, textTransform: "uppercase", color: "#475569" },
+  sellModalContent: { borderRadius: 24, padding: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10 },
+  inputModal: { height: 48, borderRadius: 12, paddingHorizontal: 16, fontSize: 14, fontWeight: "500", borderBottomWidth: 0 },
+  labelModal: { fontSize: 11, fontWeight: "800", marginLeft: 4, marginBottom: 4, textTransform: "uppercase" },
 });
